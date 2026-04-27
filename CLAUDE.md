@@ -62,7 +62,7 @@ Sections, in order, separated by `// ----------` banner comments:
 | **shell helpers** | `sh()`, `shRetry()` — promisified `exec` with retry |
 | **gt log parsing** | `parseGtLog()`, `buildStacksFromGtLog()` — text → tree |
 | **worktrees** | `fetchWorktrees()` from `git worktree list --porcelain` |
-| **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchReviewThreads` (graphql) |
+| **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchReviewThreadsBulk` (one aliased GraphQL query for all PRs) |
 | **Claude CLI** | `callClaude()`, `parseJsonLoose()`, disk-cache helpers |
 | **Jira** | `jiraGet/jiraPost`, `fetchJiraTickets`, `fetchOpenJiraTickets` (direct REST only) |
 | **session scoring** | `scoreSessionsForStack()` greps Claude session JSONLs |
@@ -82,7 +82,7 @@ Sections, in order, separated by `// ----------` banner comments:
      partition into user_segment (your PRs)
                   + upstream_segment (parent PRs by others)
 4. fetch upstream PR metadata (gh pr view per branch, parallel)
-5. fetch review-thread counts (gh api graphql per PR, parallel)
+5. fetch review-thread counts (one bulk GraphQL query, aliased fields per PR)
 6. score Claude sessions per stack (grep PR#s + branch names)
 7. enhanceStackNamesWithClaude() — bulk Claude call for any stack
                                     whose PR-set hash isn't cached

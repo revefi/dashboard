@@ -204,42 +204,51 @@ async function fetchPRMeta(num) {
   }
 }
 
-const REVIEW_THREAD_QUERY = `
-query($owner: String!, $name: String!, $num: Int!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $num) {
+// Fetch unresolved review-thread counts for many PRs in a single GraphQL request.
+// Uses aliased fields (`p<NUM>: repository(...) { pullRequest(number: NUM) {...} }`)
+// so we get the full set in one network round-trip instead of one per PR.
+async function fetchReviewThreadsBulk(nums) {
+  if (!nums || nums.length === 0) return new Map();
+  const aliasFor = (n) => `p${n}`;
+  const fragments = nums
+    .map(
+      (n) => `
+  ${aliasFor(n)}: repository(owner: "revefi", name: "rcode") {
+    pullRequest(number: ${n}) {
       reviewThreads(first: 50) {
-        nodes {
-          isResolved
-          comments(first: 1) { nodes { author { login } } }
-        }
+        nodes { isResolved comments(first: 1) { nodes { author { login } } } }
       }
     }
-  }
-}`;
+  }`
+    )
+    .join("");
+  const query = `query {${fragments}\n}`;
 
-async function fetchReviewThreads(num) {
-  // gh's `-F query=@-` reads the GraphQL query from stdin — no temp file needed.
+  const result = new Map();
+  for (const n of nums) result.set(n, { human: 0, bot: 0 });
   try {
     const stdout = await shWithInput(
-      `gh api graphql -F owner=revefi -F name=rcode -F num=${num} -F query=@- ` +
-        `--jq '.data.repository.pullRequest.reviewThreads.nodes ` +
-        `| map(select(.isResolved == false)) ` +
-        `| group_by(.comments.nodes[0].author.login == "claude") ` +
-        `| map({bot: (.[0].comments.nodes[0].author.login == "claude"), n: length})'`,
-      REVIEW_THREAD_QUERY
+      `gh api graphql -F query=@-`,
+      query
     );
-    const groups = JSON.parse(stdout || "[]");
-    let h = 0,
-      b = 0;
-    for (const g of groups) {
-      if (g.bot) b += g.n;
-      else h += g.n;
+    const json = JSON.parse(stdout);
+    const data = json?.data || {};
+    for (const n of nums) {
+      const nodes = data[aliasFor(n)]?.pullRequest?.reviewThreads?.nodes || [];
+      let h = 0,
+        b = 0;
+      for (const node of nodes) {
+        if (node.isResolved) continue;
+        const isBot = node.comments?.nodes?.[0]?.author?.login === "claude";
+        if (isBot) b++;
+        else h++;
+      }
+      result.set(n, { human: h, bot: b });
     }
-    return { human: h, bot: b };
-  } catch {
-    return { human: 0, bot: 0 };
+  } catch (err) {
+    console.warn("[review-threads] bulk fetch failed:", err.message);
   }
+  return result;
 }
 
 // ---------- Claude CLI helper ----------
@@ -476,27 +485,33 @@ async function scoreSessionsForStack(keywords, worktreeName) {
     .join("|");
   if (!pat) return null;
 
-  const results = [];
+  const escPat = pat.replace(/'/g, `'\\''`);
+  const targets = [];
   for (const dir of dirs) {
     if (!fs.existsSync(dir)) continue;
-    for (const { sid, file } of listSessions(dir)) {
-      try {
-        const { stdout } = await execP(
-          `grep -cE '${pat.replace(/'/g, `'\\''`)}' '${file.replace(
-            /'/g,
-            `'\\''`
-          )}'`
-        );
-        const count = parseInt(stdout.trim(), 10) || 0;
-        if (count > 0) {
-          const stat = fs.statSync(file);
-          results.push({ sid, count, mtime: stat.mtimeMs, dir });
-        }
-      } catch {
-        /* grep returns 1 when no matches */
-      }
-    }
+    for (const f of listSessions(dir)) targets.push({ ...f, dir });
   }
+
+  // Parallel grep across all session files. ~60 files in parallel run in well
+  // under a second on macOS; sequential awaits used to take seconds per stack.
+  const results = (
+    await Promise.all(
+      targets.map(async ({ sid, file, dir }) => {
+        try {
+          const { stdout } = await execP(
+            `grep -cE '${escPat}' '${file.replace(/'/g, `'\\''`)}'`
+          );
+          const count = parseInt(stdout.trim(), 10) || 0;
+          if (count <= 0) return null;
+          const stat = fs.statSync(file);
+          return { sid, count, mtime: stat.mtimeMs, dir };
+        } catch {
+          // grep exit 1 = no matches.
+          return null;
+        }
+      })
+    )
+  ).filter(Boolean);
   if (results.length === 0) return null;
   results.sort((a, b) => b.count - a.count || b.mtime - a.mtime);
   const top = results[0];
@@ -625,33 +640,24 @@ async function buildModel() {
     })
   );
 
-  // Fetch review threads for all user PRs.
+  // Fetch review threads for all user PRs in ONE bulk GraphQL query (aliased fields).
   const allUserPRNums = enrichedStacks.flatMap((s) =>
     s.userBranches.filter((u) => u.pr && !u.isMerged).map((u) => u.pr.number)
   );
-  const threadCounts = new Map();
-  await Promise.all(
-    allUserPRNums.map(async (n) => {
-      threadCounts.set(n, await fetchReviewThreads(n));
-    })
-  );
+  const threadCounts = await fetchReviewThreadsBulk(allUserPRNums);
 
-  // Build final model.
-  const stacks = [];
-  let stackIdx = 0;
-  for (const es of enrichedStacks) {
-    stackIdx++;
+  // Pre-compute jiraKeys + worktree per stack so we can kick off all session-scoring
+  // calls in parallel up front (each scoring call grep's ~60 JSONL files; serializing
+  // them across stacks turned a few-hundred-ms job into seconds).
+  const enrichedMeta = enrichedStacks.map((es) => {
     const userOpenPRs = es.userBranches.filter((u) => u.pr && !u.isMerged);
     const userMergedPRs = es.userBranches.filter((u) => u.isMerged);
-
     const jiraKeysSet = new Set();
     for (const u of userOpenPRs) {
       const t = parseTitle(u.pr.title);
       if (t.jira_tag && t.jira_tag !== "NO-JIRA") jiraKeysSet.add(t.jira_tag);
     }
     const jiraKeys = [...jiraKeysSet].sort();
-
-    // Find worktree associated with this stack: any user branch matches a worktree branch.
     let worktree = null;
     for (const u of es.userBranches) {
       if (worktreeBranchToWT.has(u.branch)) {
@@ -659,6 +665,23 @@ async function buildModel() {
         break;
       }
     }
+    const keywords = [
+      ...userOpenPRs.map((u) => String(u.pr.number)),
+      ...userMergedPRs.map((u) => String(u.pr.n || u.pr.number)),
+      ...es.userBranches.map((u) => u.branch),
+      ...jiraKeys,
+      worktree?.name,
+    ];
+    return { es, userOpenPRs, userMergedPRs, jiraKeys, worktree, keywords };
+  });
+  const resumePromises = enrichedMeta.map((m) =>
+    scoreSessionsForStack(m.keywords, m.worktree?.name)
+  );
+
+  // Build final model.
+  const stacks = [];
+  for (let stackIdx = 0; stackIdx < enrichedMeta.length; stackIdx++) {
+    const { es, userOpenPRs, userMergedPRs, jiraKeys, worktree } = enrichedMeta[stackIdx];
 
     // Build PRs (top → bottom).
     const userPRsRender = userOpenPRs.map((u, i) => {
@@ -790,16 +813,8 @@ async function buildModel() {
         ? jiraKeys.join("+")
         : `NO-JIRA-${es.userBranches[es.userBranches.length - 1].branch}`;
 
-    // Resume session — only use highly-specific keywords to avoid cross-stack false positives.
-    // PR numbers and full branch names are unique enough; short fragments cause leakage.
-    const keywords = [
-      ...userOpenPRs.map((u) => String(u.pr.number)),
-      ...userMergedPRs.map((u) => String(u.pr.n || u.pr.number)),
-      ...es.userBranches.map((u) => u.branch),
-      ...jiraKeys,
-      worktree?.name,
-    ];
-    const resume = await scoreSessionsForStack(keywords, worktree?.name);
+    // Resume session promise was kicked off up front in parallel with all stacks.
+    const resume = await resumePromises[stackIdx];
 
     stacks.push({
       stack_key: stackKey,
@@ -841,44 +856,33 @@ async function buildModel() {
 
   // Stale worktrees.
   const activeBranches = new Set(openPRs.map((p) => p.headRefName));
-  const staleWorktrees = [];
-  for (const w of worktrees) {
-    if (activeBranches.has(w.branch)) continue;
-    const anyPR = await fetchAnyPR(w.branch);
-    if (anyPR) {
-      if (anyPR.state === "MERGED") {
-        staleWorktrees.push({
-          ...w,
-          reason: `PR #${anyPR.number} merged`,
-          pr_num: anyPR.number,
-          pr_url: anyPR.url,
-        });
-      } else if (anyPR.state === "CLOSED") {
-        staleWorktrees.push({
-          ...w,
-          reason: `PR #${anyPR.number} closed without merge`,
-          pr_num: anyPR.number,
-          pr_url: anyPR.url,
-        });
+  const staleResults = await Promise.all(
+    worktrees.map(async (w) => {
+      if (activeBranches.has(w.branch)) return null;
+      const anyPR = await fetchAnyPR(w.branch);
+      if (anyPR) {
+        if (anyPR.state === "MERGED") {
+          return { ...w, reason: `PR #${anyPR.number} merged`, pr_num: anyPR.number, pr_url: anyPR.url };
+        }
+        if (anyPR.state === "CLOSED") {
+          return { ...w, reason: `PR #${anyPR.number} closed without merge`, pr_num: anyPR.number, pr_url: anyPR.url };
+        }
+        return null;
       }
-    } else {
       try {
         const { stdout } = await execP(
           `git -C '${w.path}' log main..HEAD --oneline | head -1`
         );
         if (!stdout.trim()) {
-          staleWorktrees.push({
-            ...w,
-            reason: "Branch fully merged into main (no unique commits)",
-            pr_num: null,
-            pr_url: null,
-          });
+          return { ...w, reason: "Branch fully merged into main (no unique commits)", pr_num: null, pr_url: null };
         }
       } catch {
-        /* ignore */
+        // ignore — git error means we just don't classify this worktree as stale
       }
-    }
-  }
+      return null;
+    })
+  );
+  const staleWorktrees = staleResults.filter(Boolean);
 
   // Enrich stacks with Jira chip data (key + summary).
   const allJiraKeys = [...new Set(stacks.flatMap((s) => s.jira_keys))];
