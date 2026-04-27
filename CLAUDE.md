@@ -3,29 +3,35 @@
 Personal PR/stack dashboard for Revefi work. Replaces running `/daily-start`
 repeatedly throughout the day. A small Node server polls `gh`, `gt`, Jira REST,
 and Claude session files; a vanilla-JS SPA renders the result. Lives at
-`~/dashboard/`, gitignored, not tied to any single project except via configured
-absolute paths.
+`~/dashboard/`, its own private GitHub repo, not tied to any single project
+except via configured absolute paths in `server.js` (`REPO`, `SESSIONS_ROOT`).
 
 ## Files
 
 ```
 ~/dashboard/
-├── server.js               main HTTP server (zero deps, single file)
-├── start.sh                launchd wrapper (sets PATH, sources zshrc creds)
+├── server.js                main HTTP server (zero deps, single file)
+├── start.sh                 launchd wrapper (sets PATH, sources zshrc creds)
 ├── public/
-│   ├── index.html          SPA shell (~140 lines)
-│   ├── app.js              all client logic (~880 lines)
-│   ├── styles.css          all styling (~1090 lines)
+│   ├── index.html           SPA shell — three-column layout
+│   ├── app.js               all client logic (vanilla JS, single file)
+│   ├── styles.css           all styling — CSS variables for light + dark
+│   ├── marked.min.js        markdown parser (GFM), ~40KB, served as static
 │   └── favicon.ico
-├── cache/
-│   ├── recommendations.json   Claude-generated recs (manual refresh only)
-│   └── stack-names.json       Claude-named stacks, keyed by PR-set hash
-├── README.md               user-facing docs
-└── CLAUDE.md               (this file — codebase guide for future edits)
+├── cache/                   gitignored
+│   ├── recommendations.json    Claude-generated recs (manual refresh only)
+│   └── stack-names.json        Claude-named stacks, keyed by PR-set hash
+├── README.md                user-facing docs
+└── CLAUDE.md                (this file — codebase guide for future edits)
+
+~/Library/LaunchAgents/
+└── com.varun.dashboard.plist   launchd job; runs ~/dashboard/start.sh on login
 ```
 
-There are no `node_modules` and no build step — Node 22's built-in `http`
-module + `fetch` are sufficient. The `claude` CLI is shelled out for AI work.
+There are no `node_modules` and no build step on either side — Node 22's built-in
+`http` module + `fetch` are sufficient on the server, and the frontend is plain
+HTML/CSS/JS plus the dropped-in `marked.min.js`. The `claude` CLI is shelled out
+for AI-shaped work (recommendations, stack name generation).
 
 ## Runtime architecture
 
@@ -40,7 +46,7 @@ module + `fetch` are sufficient. The `claude` CLI is shelled out for AI work.
    │   /api/data            ← model JSON                │
    │   /api/recommendations ← Claude-generated <li>s    │
    │   /api/health          ← lightweight status        │
-   │   /  /styles.css /app.js  /favicon.ico (static)    │
+   │   /  /styles.css /app.js /marked.min.js /favicon   │
    └─────────┬────────────────────────────────────────┬─┘
              │ shells out to                          │ writes to
              ▼                                        ▼
@@ -52,6 +58,9 @@ module + `fetch` are sufficient. The `claude` CLI is shelled out for AI work.
    └─────────────────────┘
 ```
 
+Plain refresh end-to-end takes ~8 seconds, dominated by GitHub's GraphQL
+response time and a few `gh` subprocess spawns. See "Performance notes" below.
+
 ## server.js anatomy
 
 Sections, in order, separated by `// ----------` banner comments:
@@ -59,13 +68,13 @@ Sections, in order, separated by `// ----------` banner comments:
 | Section | What it does |
 | --- | --- |
 | **constants** | `REPO`, `SESSIONS_ROOT`, `PORT`, `CACHE_DIR`, file paths |
-| **shell helpers** | `sh()`, `shRetry()` — promisified `exec` with retry |
+| **shell helpers** | `sh()`, `shRetry()`, `shWithInput()` — promisified `exec` / `spawn` with retry / stdin pipe |
 | **gt log parsing** | `parseGtLog()`, `buildStacksFromGtLog()` — text → tree |
 | **worktrees** | `fetchWorktrees()` from `git worktree list --porcelain` |
 | **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchReviewThreadsBulk` (one aliased GraphQL query for all PRs) |
 | **Claude CLI** | `callClaude()`, `parseJsonLoose()`, disk-cache helpers |
-| **Jira** | `jiraGet/jiraPost`, `fetchJiraTickets`, `fetchOpenJiraTickets` (direct REST only) |
-| **session scoring** | `scoreSessionsForStack()` greps Claude session JSONLs |
+| **Jira** | `jiraGet/jiraPost`, `fetchJiraTickets`, `fetchOpenJiraTickets` (direct REST only — Claude/MCP fallback was removed once REST was stable) |
+| **session scoring** | `scoreSessionsForStack()` greps Claude session JSONLs (parallel `Promise.all`) |
 | **title parsing** | `parseTitle()` strips `[REV-XXXX][Part N]` prefix |
 | **model assembly** | `buildModel()` — the main pipeline |
 | **stack-name generation** | `enhanceStackNamesWithClaude()` (Claude bulk call, cached) |
@@ -83,14 +92,17 @@ Sections, in order, separated by `// ----------` banner comments:
                   + upstream_segment (parent PRs by others)
 4. fetch upstream PR metadata (gh pr view per branch, parallel)
 5. fetch review-thread counts (one bulk GraphQL query, aliased fields per PR)
-6. score Claude sessions per stack (grep PR#s + branch names)
-7. enhanceStackNamesWithClaude() — bulk Claude call for any stack
+6. kick off session scoring for ALL stacks in parallel up front
+7. build PR objects per stack (await each pre-launched scoring promise)
+8. enhanceStackNamesWithClaude() — bulk Claude call for any stack
                                     whose PR-set hash isn't cached
-8. fetch Jira tickets bulk (chip summaries) via direct REST
-9. fetch open Jira list (untouched section)
-10. detect stale worktrees (any worktree whose branch isn't in open PRs)
-11. assemble final model object
+9. detect stale worktrees (parallel Promise.all over worktrees)
+10. fetch Jira tickets bulk (chip summaries) via direct REST
+11. fetch open Jira list (untouched section)
+12. assemble final model object
 ```
+
+Every step that touches I/O is parallelized — see "Performance notes".
 
 A "stack" object on the wire looks like:
 
@@ -121,8 +133,6 @@ Pr = {
 
 ## Caching model
 
-Three layers, intentionally:
-
 | Cache | Where | TTL | Invalidation |
 | --- | --- | --- | --- |
 | `cache.data` | in-memory | 30s | `?refresh=1` query param |
@@ -131,9 +141,7 @@ Three layers, intentionally:
 
 Jira tickets and the Untouched Jira list are NOT cached on disk — direct REST
 is fast enough (~50ms per ticket, <200ms for the bulk search) that every plain
-↻ Refresh fetches them fresh. There's a `jiraTicketMem` Map in
-`fetchJiraTickets`, but it's only re-populated within a single `buildModel()`
-call to avoid duplicate REST calls when multiple stacks reference the same key.
+↻ Refresh fetches them fresh.
 
 ### Refresh modes
 
@@ -146,8 +154,69 @@ call to avoid duplicate REST calls when multiple stacks reference the same key.
 ## Frontend (`public/`)
 
 `index.html` is a static SPA shell with named placeholder elements
-(`#summary`, `#active-stacks`, `#untouched-rows`, `#recs-list`, etc.).
-`app.js` populates them by `innerHTML = ...` after fetching `/api/data`.
+(`#summary`, `#active-stacks`, `#untouched-rows`, `#recs-list`,
+`#notepad-content`, etc.). `app.js` populates them by `innerHTML = ...` after
+fetching `/api/data`.
+
+### Layout
+
+Three columns with sticky behavior:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  header.top  (sticky, top:0, z-index:50, opaque bg)             │
+├──────────┬───────────────────────────────────────────┬──────────┤
+│ sidebar  │  main-col                                 │ notepad  │
+│ (sticky, │  (scrolls)                                │ (sticky, │
+│  top:    │                                           │  top:    │
+│  --sticky│  - active-section (stack cards)           │  --sticky│
+│  -top)   │  - merged-section                         │  -top)   │
+│          │  - untouched-section (Jira table)         │          │
+│  jump-nav│  - stale-section                          │ markdown │
+│  links   │  - recs-section                           │  scratch │
+│          │                                           │  pad     │
+└──────────┴───────────────────────────────────────────┴──────────┘
+```
+
+`--sticky-top` is a CSS variable set by `syncStickyTop()` on load + on resize.
+It equals the actual rendered header height + a 16px gap, so the sidebar and
+notepad always anchor right under the header even when the action buttons wrap
+to a second line.
+
+Responsive collapse:
+- ≤1280px: drop the notepad first (back to sidebar | main)
+- ≤900px: drop the sidebar too (single column, mobile)
+
+### Stack cards — custom toggle (NOT `<details>/<summary>`)
+
+Each stack card is a plain `<div class="card stack-card">` containing:
+- `<div class="stack-summary" data-toggle-card>` — always visible (header)
+- `<div class="stack-body">` — visibility controlled by `.expanded` class
+
+A click on `[data-toggle-card]` toggles the `.expanded` class on the parent
+card. Clicks bubbling from `[data-stop-toggle]` descendants are ignored
+(`if (e.target.closest("[data-stop-toggle]")) return;`).
+
+We tried `<details>/<summary>` first. It broke once we wanted a contenteditable
+inside the summary — `<summary>` would steal focus, and Space toggled the
+details instead of inserting a space. The custom div toggle has none of those
+edge cases.
+
+### Markdown remarks
+
+The per-stack remarks, per-jira-row remarks, and the right-hand notepad all
+share `wireMarkdownRemarks(wrap, persistKey, opts)`:
+
+- Storage in localStorage is **raw markdown** (was HTML in earlier versions).
+- View mode: `<div class="md-view">` rendered via `marked.parse()` with GFM
+  enabled. Click → swaps to edit mode.
+- Edit mode: `<textarea class="md-editor">`, autofocused with caret at end,
+  auto-resizes on input. Cmd/Ctrl+B / I / K shortcuts wrap selection. Blur or
+  Escape or Cmd+Enter commits.
+
+`marked.min.js` is loaded with `defer` in `index.html` so it's available by
+the time `DOMContentLoaded` fires. `wireMarkdownRemarks` falls back to
+`esc(text).replace(/\n/g, "<br>")` if `window.marked` is somehow undefined.
 
 ### Render pipeline
 
@@ -159,16 +228,28 @@ fetchData() ──→ render(data) ──┬──→ renderSummary()
                                 ├──→ renderStaleWorktrees()
                                 ├──→ rebuildSidebar()
                                 └──→ wireDelegates()  ← attach event listeners
+
+initNotepad()         ─────────────────→ wireMarkdownRemarks (one-time on load)
 ```
 
-`wireDelegates()` is called after every render and is idempotent (uses
-`el._wired = true` flags). It attaches:
+`wireDelegates()` runs after every render and is idempotent. Each loop uses
+its OWN flag (e.g. `_jumpWired`, `_copyWired`, `_actionWired`,
+`_stopToggleWired`, `_editNameWired`, `_toggleWired`, `_mdWired`). A shared
+`_wired` flag would collide when a single element matches multiple selectors
+(e.g. the stack-name pencil has both `data-stop-toggle` and `data-edit-name`).
 
-- `toggle` listeners on `details.stack-card` (for the "Collapse all" label)
-- `paste` / `blur` / `keydown` on `.stack-remarks` and `.remarks` for rich-text
-- `click` on `[data-copy]` (copy commands), `[data-action="complete"]`,
-  `[data-action="restore"]`, `[data-jump]` (sidebar nav)
+It attaches:
+- `click` on `[data-toggle-card]` (card collapse toggle)
+- `click` on `[data-jump]` (sidebar nav, expands target card before scrolling)
+- `paste` / `blur` / `keydown` on `.stack-remarks` and `.remarks` (markdown
+  rich text via `wireMarkdownRemarks`)
 - Per-row jira working-today checkbox + remarks
+- `click` + propagation-stop on `[data-copy]` (copy commands)
+- `click` on `[data-action="complete"]` / `[data-action="restore"]`
+- `click`+`mousedown`+keydown stop on `[data-stop-toggle]` (defensive — keeps
+  events inside interactive children of the card-summary from triggering the
+  card toggle)
+- `click` on `[data-edit-name]` (pencil icon — inline rename of stack name)
 
 ### localStorage keys
 
@@ -177,8 +258,10 @@ All under the `dashboard.*` namespace:
 | Key | Purpose |
 | --- | --- |
 | `dashboard.completed` | JSON array of stack_keys marked complete |
-| `dashboard.remarks.stack.<stack_key>` | Per-stack rich-text remarks |
-| `dashboard.remarks.jira.<key>` | Per-Jira-ticket rich-text remarks |
+| `dashboard.remarks.stack.<stack_key>` | Per-stack remarks (markdown) |
+| `dashboard.remarks.jira.<key>` | Per-Jira-ticket remarks (markdown) |
+| `dashboard.notepad` | Right-side scratchpad content (markdown) |
+| `dashboard.stack_name_override.<stack_key>` | User's manual rename of a stack |
 | `dashboard.working.YYYY-MM-DD.<key>` | Per-day "working today" toggle |
 | `dashboard.lastIntelligentTs` | ms-since-epoch of last 🧠 click |
 | `dashboard.sprint_filter` | "current" / "all" / "none" / `<sprintId>` |
@@ -194,7 +277,7 @@ All under the `dashboard.*` namespace:
 
 ### To add a new section to the UI
 
-1. Add a `<section id="...">` placeholder to `index.html`.
+1. Add a `<section id="...">` placeholder to `index.html` inside `<main class="main-col">`.
 2. Add a render function in `app.js` (e.g., `renderXyz(data)`) and call it
    from `render(data)`.
 3. Update `rebuildSidebar(data)` so the section shows up in the jump nav.
@@ -202,11 +285,12 @@ All under the `dashboard.*` namespace:
 
 ### To add a new field to stack cards
 
-1. Server-side: enrich the stack model in `buildModel()` (or in
-   `enhanceStackNamesWithClaude`-style post-processing).
+1. Server-side: enrich the stack model in `buildModel()`.
 2. Frontend: add the rendering inside `renderStackCard()` in `app.js`. Stack
-   card structure: `summary` (visible when collapsed) → `stack-body`
-   (revealed on expand). Header info goes in `summary`, detail in `stack-body`.
+   card structure: `stack-summary` (visible always) → `stack-body` (revealed
+   when `.expanded`). Header info goes in `stack-summary`, detail in
+   `stack-body`. Anything inside `stack-summary` that should NOT toggle the
+   card on click should carry `data-stop-toggle`.
 
 ### To add a new persisted user-setting
 
@@ -222,12 +306,37 @@ function setFoo(v) { localStorage.setItem(FOO_KEY, v); }
 
 Use `callClaude(prompt, opts)` — it spawns the `claude` CLI, pipes the prompt
 via stdin, returns stdout. `opts.allowedTools` accepts a comma-separated MCP
-tool name list. `opts.model` defaults to `claude-haiku-4-5`. Always cache
-the result on disk via `loadDiskCache` / `saveDiskCache` if the answer is
-expensive — Claude calls are 5–60s each.
+tool name list. `opts.model` defaults to `claude-haiku-4-5`. Always cache the
+result on disk via `loadDiskCache` / `saveDiskCache` if the answer is expensive
+— Claude calls are 5–60s each.
 
 If Claude needs to return structured data, ask for JSON only and use
 `parseJsonLoose()` to be tolerant of fences/preamble.
+
+### To add a markdown-backed editable region
+
+Drop a `<div data-md-key="dashboard.your_key" class="..."></div>` into the
+DOM and call `wireMarkdownRemarks(div, div.dataset.mdKey, { placeholder: "..." })`
+once. The helper takes over the wrap's children — installs a `.md-view` and
+a `.md-editor` and toggles between them.
+
+## Performance notes
+
+Plain refresh ≈ 8s. The sequence (after parallelization):
+
+| Stage | Cost |
+| --- | --- |
+| `gt log` + `gh pr list` + recent merged + worktrees | ~1.5s parallel |
+| Upstream `fetchAnyPR` × N + `fetchPRMeta` × N | ~1s parallel (often N=0) |
+| `fetchReviewThreadsBulk` for all open user PRs | ~2-3s — single aliased GraphQL query, **not** one-call-per-PR |
+| Session scoring (~60 JSONL files × N stacks) | ~1s — files parallel within scoring, all stacks scored concurrently |
+| Stack-name generation | 0s (cached) or ~5s (cold) |
+| Jira REST × N + Jira search | <1s parallel |
+| Stale-worktree detection | <1s parallel |
+
+Earlier versions did 27 parallel `gh api graphql` subprocess spawns for review
+threads, sequential `grep` per session file, and sequential stale-worktree
+checks — ~28s baseline.
 
 ## Gotchas (things that bit us)
 
@@ -237,8 +346,8 @@ If Claude needs to return structured data, ask for JSON only and use
    `--repo revefi/rcode` explicitly because gh's auto-detect from cwd is
    also flaky in the same context.
 
-2. **Atlassian deprecated `/rest/api/3/search`** mid-2024. Must use POST
-   `/rest/api/3/search/jql` — see `jiraPost()` and `fetchOpenJiraTickets()`.
+2. **Atlassian deprecated `/rest/api/3/search`** — must use POST
+   `/rest/api/3/search/jql` (see `jiraPost()` and `fetchOpenJiraTickets()`).
    Sprint custom field is `customfield_10020` on revefi.atlassian.net.
 
 3. **`gt log short --no-interactive --classic`** uses Unicode box-drawing
@@ -251,15 +360,17 @@ If Claude needs to return structured data, ask for JSON only and use
    first branch that doesn't match an open user PR or recent-merged user PR.
 
 5. **macOS TCC blocks launchd from Desktop / Documents / Downloads.**
-   That's why this project lives at `~/dashboard/`, not `~/Desktop/...`. TCC
-   also blocks reads of `~/.tool-versions` and `~/.asdfrc`, so launchd can't
-   use asdf shims. `start.sh` works around this by hardcoding the concrete
-   `node` and `gh` binary paths, and setting an explicit PATH for child
-   processes.
+   That's why this project lives at `~/dashboard/`, not under `~/Desktop/`.
+   TCC also blocks reads of `~/.tool-versions` and `~/.asdfrc`, so launchd
+   can't use asdf shims. `start.sh` works around this by hardcoding the
+   concrete `node` and `gh` binary paths, and setting an explicit PATH for
+   the server's child processes.
 
-6. **The `toggle` DOM event does NOT bubble.** When wiring "Collapse all"
-   label updates, attach a listener to each `<details>` individually inside
-   `wireDelegates()`, not a delegated listener on `document`.
+6. **Stack cards are NOT `<details>/<summary>`.** They look like one (header
+   always visible, body toggles), but they're plain `<div>`s with an
+   `.expanded` class. We tried `<details>` first — putting a contenteditable
+   inside `<summary>` caused Space-key toggling and focus stealing that
+   couldn't be cleanly fought. The custom toggle has none of that.
 
 7. **Recommendations cache file shape ≠ TTL'd disk-cache shape.** Recs are
    stored as `{ts, html}` directly (saved by `saveRecsToDisk`), not the
@@ -269,14 +380,26 @@ If Claude needs to return structured data, ask for JSON only and use
 8. **GitHub TLS handshakes are flaky from CLI.** `shRetry` exists exactly
    for this; wrap any new `gh ...` calls in it.
 
+9. **Per-loop `_wired` flags in `wireDelegates`.** Shared `el._wired = true`
+   broke when an element matched multiple loops (the pencil button has both
+   `data-stop-toggle` and `data-edit-name`). Always use a per-loop flag name.
+
+10. **`marked.min.js` loads with `defer`.** It's available by the first
+    `DOMContentLoaded`, not before. `wireMarkdownRemarks` has a
+    `typeof window.marked === "undefined"` fallback for safety.
+
 ## Operations
 
-- Server runs under launchd. Start: `launchctl load ~/Library/LaunchAgents/com.varun.dashboard.plist`. Stop: `launchctl unload ...`. Status: `launchctl list | grep dashboard`.
+- Server runs under launchd. Plist: `~/Library/LaunchAgents/com.varun.dashboard.plist`.
+  - Start: `launchctl load ~/Library/LaunchAgents/com.varun.dashboard.plist`
+  - Stop:  `launchctl unload ~/Library/LaunchAgents/com.varun.dashboard.plist`
+  - Status: `launchctl list | grep dashboard`
+  - Hot restart after code change: `launchctl kickstart -k gui/$(id -u)/com.varun.dashboard`
 - Logs: `/tmp/dashboard.log`, `/tmp/dashboard.err`.
-- Manual restart after a code change: `launchctl kickstart -k gui/$(id -u)/com.varun.dashboard`.
 - For server.js or start.sh changes you need a restart. For `public/*.js`,
-  `public/*.css`, `public/*.html` — just hard-refresh the browser
-  (Cmd+Shift+R).
+  `public/*.css`, `public/*.html` — just hard-refresh the browser (Cmd+Shift+R).
+- The launchd job sets `KeepAlive=true` and `ThrottleInterval=30`, so
+  unhandled crashes get auto-restarted with a 30s cooldown.
 
 ## Configuration
 
@@ -285,10 +408,7 @@ Two env vars must be in the launchd job's environment for full functionality:
 - `ATLASSIAN_EMAIL` — for Jira REST auth
 - `ATLASSIAN_API_TOKEN` — get one at https://id.atlassian.com/manage-profile/security/api-tokens
 
-Both are sourced from `~/.zshrc` by `start.sh` (via grep + eval) so they don't
-need to live in the launchd plist itself. Without them the dashboard still
-works — the Untouched Jira section and stack-card chip summaries just don't
-populate (the UI shows a "Jira not configured" hint).
+Both are sourced from `~/.zshrc` by `start.sh` (via `grep -E '^export ATLASSIAN_' "$HOME/.zshrc"` then `eval`) so they don't need to live in the launchd plist itself. Without them, the dashboard still works — the Untouched Jira section and stack-card chip summaries just don't populate (the UI shows a "Jira not configured" hint).
 
 The `REPO` and `SESSIONS_ROOT` constants at the top of `server.js` point at
 the rcode repo and your Claude project sessions dir. Change these if you ever
