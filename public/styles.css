@@ -331,9 +331,13 @@ h2 .muted {
   padding: 2px 8px;
   background: var(--card);
   color: var(--text);
-  min-width: 240px;
-  max-width: 100%;
   outline: none;
+  /* Take all remaining space in the flex row (after #N badge), shrinking below
+     content if needed. min-width: 0 is required for flex items to shrink. */
+  flex: 1 1 100%;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .pill {
   display: inline-flex;
