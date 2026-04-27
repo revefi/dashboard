@@ -212,7 +212,7 @@ function renderStackCard(stack, isMerged, idx) {
   return `
     <details id="${anchorId}" class="card stack-card ${
     completed ? "merged-card" : ""
-  }" ${completed ? "" : "open"} data-stack-key="${esc(stack.stack_key)}">
+  }" data-stack-key="${esc(stack.stack_key)}">
       <summary>
         <div class="stack-head">
           <div>
@@ -245,14 +245,6 @@ function renderStackCard(stack, isMerged, idx) {
           </div>
         </div>
         <div class="counts" style="margin-top:8px">${countChips}</div>
-      </summary>
-      <div class="stack-body">
-        ${completed ? "" : renderUpstreamBanner(stack)}
-        ${
-          stack.needs_restack && !completed
-            ? '<div class="restack-warn">⚠️ Run <code>gt restack</code> before merging.</div>'
-            : ""
-        }
         <div class="actions">
           ${completeBtn}
           ${stack.resume && !completed ? renderResumeBtn(stack.resume) : ""}
@@ -261,12 +253,20 @@ function renderStackCard(stack, isMerged, idx) {
         ${
           !completed
             ? `
-        <div class="stack-remarks-wrap">
+        <div class="stack-remarks-wrap" data-stop-toggle>
           <div class="label">📝 Remarks</div>
           <div class="stack-remarks" contenteditable="true" spellcheck="false" data-remarks-key="${esc(
             stack.stack_key
           )}"></div>
         </div>`
+            : ""
+        }
+      </summary>
+      <div class="stack-body">
+        ${completed ? "" : renderUpstreamBanner(stack)}
+        ${
+          stack.needs_restack && !completed
+            ? '<div class="restack-warn">⚠️ Run <code>gt restack</code> before merging.</div>'
             : ""
         }
         <div class="stack-list">
@@ -626,11 +626,14 @@ function wireDelegates() {
     wireRichText(rem, JIRA_REMARKS_PREFIX + k);
   });
 
-  // Copy buttons.
+  // Copy buttons. Stop propagation so clicks don't toggle the parent <details>
+  // when this button lives inside a <summary>.
   $$("[data-copy]").forEach((el) => {
     if (el._wired) return;
     el._wired = true;
-    el.addEventListener("click", () => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       const cmd = el.dataset.cmd;
       navigator.clipboard.writeText(cmd).then(() => {
         const cp = el.querySelector(".cp");
@@ -657,6 +660,20 @@ function wireDelegates() {
       render(currentData);
     });
   });
+
+  // Anything tagged data-stop-toggle: swallow click + mousedown so interacting
+  // with content inside <summary> (e.g. typing in remarks) doesn't toggle the
+  // <details> open/closed.
+  $$("[data-stop-toggle]").forEach((el) => {
+    if (el._wired) return;
+    el._wired = true;
+    const stop = (e) => e.stopPropagation();
+    el.addEventListener("click", stop);
+    el.addEventListener("mousedown", stop);
+  });
+
+  // Cards default to collapsed; sync the header button's label to match.
+  updateCollapseAllLabel();
 }
 
 function wireRichText(el, persistKey) {
