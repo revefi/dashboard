@@ -661,15 +661,16 @@ function wireDelegates() {
     });
   });
 
-  // Anything tagged data-stop-toggle: swallow click + mousedown so interacting
-  // with content inside <summary> (e.g. typing in remarks) doesn't toggle the
-  // <details> open/closed.
+  // Anything tagged data-stop-toggle: swallow pointer + key events so interacting
+  // with content inside <summary> (e.g. typing Space in the remarks editable)
+  // doesn't bubble up and toggle the <details> open/closed.
   $$("[data-stop-toggle]").forEach((el) => {
     if (el._wired) return;
     el._wired = true;
     const stop = (e) => e.stopPropagation();
-    el.addEventListener("click", stop);
-    el.addEventListener("mousedown", stop);
+    for (const evt of ["click", "mousedown", "keydown", "keypress", "keyup"]) {
+      el.addEventListener(evt, stop);
+    }
   });
 
   // Cards default to collapsed; sync the header button's label to match.
