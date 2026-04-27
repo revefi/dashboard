@@ -4,7 +4,19 @@ const COMPLETED_KEY = "dashboard.completed";
 const REMARKS_KEY_PREFIX = "dashboard.remarks.stack.";
 const JIRA_REMARKS_PREFIX = "dashboard.remarks.jira.";
 const WORKING_KEY_PREFIX = "dashboard.working.";
+const STACK_NAME_OVERRIDE_PREFIX = "dashboard.stack_name_override.";
 const AUTO_REFRESH_MS = 600_000; // 10 minutes
+
+function getStackNameOverride(stackKey) {
+  return localStorage.getItem(STACK_NAME_OVERRIDE_PREFIX + stackKey);
+}
+function setStackNameOverride(stackKey, name) {
+  if (name && name.trim()) {
+    localStorage.setItem(STACK_NAME_OVERRIDE_PREFIX + stackKey, name.trim());
+  } else {
+    localStorage.removeItem(STACK_NAME_OVERRIDE_PREFIX + stackKey);
+  }
+}
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -216,9 +228,11 @@ function renderStackCard(stack, isMerged, idx) {
       <div class="stack-summary" data-toggle-card>
         <div class="stack-head">
           <div>
-            <div class="stack-name"><span class="stack-num-h">#${idx}</span>${esc(
-    stack.name
-  )}</div>
+            <div class="stack-name">
+              <span class="stack-num-h">#${idx}</span><span class="stack-name-text">${esc(
+    getStackNameOverride(stack.stack_key) || stack.name
+  )}</span><button class="stack-name-edit" data-edit-name data-stop-toggle title="Edit name (click to rename)" type="button">✎</button>
+            </div>
             <div class="meta-row" style="margin-top:0">
               ${
                 stack.top_pr
@@ -715,6 +729,66 @@ function wireDelegates() {
     for (const evt of ["click", "mousedown", "keydown", "keypress", "keyup"]) {
       el.addEventListener(evt, stop);
     }
+  });
+
+  // Pencil icon next to stack name: click to inline-edit the stack name. The
+  // override is keyed by stack_key in localStorage and takes priority over the
+  // model's `stack.name` (which is Claude-generated).
+  $$("[data-edit-name]").forEach((btn) => {
+    if (btn._wired) return;
+    btn._wired = true;
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const card = btn.closest(".stack-card");
+      if (!card) return;
+      const stackKey = card.dataset.stackKey;
+      const nameDiv = btn.parentElement;
+      const textSpan = nameDiv.querySelector(".stack-name-text");
+      if (!textSpan) return;
+      const original = textSpan.textContent;
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "stack-name-input";
+      input.value = original;
+      input.setAttribute("data-stop-toggle", "");
+      // Stop propagation directly on the input too (data-stop-toggle handlers
+      // are attached on render; this freshly-created node hasn't been wired yet).
+      const stop = (ev) => ev.stopPropagation();
+      for (const evt of ["click", "mousedown", "keydown", "keypress", "keyup"]) {
+        input.addEventListener(evt, stop);
+      }
+
+      let finalized = false;
+      const finish = (save) => {
+        if (finalized) return;
+        finalized = true;
+        const next = input.value.trim();
+        if (save && next && next !== original) {
+          setStackNameOverride(stackKey, next);
+          textSpan.textContent = next;
+        }
+        input.replaceWith(textSpan);
+        btn.style.display = "";
+      };
+
+      input.addEventListener("blur", () => finish(true));
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          finish(true);
+        } else if (ev.key === "Escape") {
+          ev.preventDefault();
+          finish(false);
+        }
+      });
+
+      textSpan.replaceWith(input);
+      btn.style.display = "none";
+      input.focus();
+      input.select();
+    });
   });
 
   // Cards default to collapsed; sync the header button's label to match.
