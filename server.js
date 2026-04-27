@@ -51,6 +51,29 @@ async function shRetry(cmd, opts = {}, attempts = 3) {
   throw lastErr;
 }
 
+// Like sh() but pipes `input` to the child's stdin. Used when we need to send a
+// multi-line payload (e.g. a GraphQL query) that's awkward to inline in the cmd.
+async function shWithInput(cmd, input, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, {
+      shell: true,
+      cwd: REPO,
+      ...opts,
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (d) => (stdout += d));
+    proc.stderr.on("data", (d) => (stderr += d));
+    proc.on("close", (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`shell exit ${code}: ${stderr.slice(0, 500)}`));
+    });
+    proc.on("error", reject);
+    proc.stdin.write(input);
+    proc.stdin.end();
+  });
+}
+
 // ---------- gt log parsing ----------
 function parseGtLog(text) {
   const lines = text.split("\n");
@@ -196,15 +219,15 @@ query($owner: String!, $name: String!, $num: Int!) {
 }`;
 
 async function fetchReviewThreads(num) {
+  // gh's `-F query=@-` reads the GraphQL query from stdin — no temp file needed.
   try {
-    const queryFile = path.join(__dirname, ".gql-tmp.graphql");
-    fs.writeFileSync(queryFile, REVIEW_THREAD_QUERY);
-    const stdout = await sh(
-      `gh api graphql -F owner=revefi -F name=rcode -F num=${num} -F query=@${queryFile} ` +
+    const stdout = await shWithInput(
+      `gh api graphql -F owner=revefi -F name=rcode -F num=${num} -F query=@- ` +
         `--jq '.data.repository.pullRequest.reviewThreads.nodes ` +
         `| map(select(.isResolved == false)) ` +
         `| group_by(.comments.nodes[0].author.login == "claude") ` +
-        `| map({bot: (.[0].comments.nodes[0].author.login == "claude"), n: length})'`
+        `| map({bot: (.[0].comments.nodes[0].author.login == "claude"), n: length})'`,
+      REVIEW_THREAD_QUERY
     );
     const groups = JSON.parse(stdout || "[]");
     let h = 0,
