@@ -534,7 +534,7 @@ function rebuildSidebar(data) {
     children: active.map((s, i) => ({
       id: `stack-active-${s.stack_key}`,
       num: i + 1,
-      label: s.name,
+      label: getStackNameOverride(s.stack_key) || s.name,
       cls: "",
     })),
   });
@@ -545,7 +545,7 @@ function rebuildSidebar(data) {
       children: merged.map((s, i) => ({
         id: `stack-merged-${s.stack_key}`,
         num: i + 1,
-        label: s.name,
+        label: getStackNameOverride(s.stack_key) || s.name,
         cls: "merged",
       })),
     });
@@ -765,12 +765,16 @@ function wireDelegates() {
         if (finalized) return;
         finalized = true;
         const next = input.value.trim();
-        if (save && next && next !== original) {
+        const changed = save && next && next !== original;
+        if (changed) {
           setStackNameOverride(stackKey, next);
           textSpan.textContent = next;
         }
         input.replaceWith(textSpan);
         btn.style.display = "";
+        // Sidebar nav reads names lazily — rebuild it so the renamed stack
+        // shows up there immediately too.
+        if (changed) rebuildSidebar(currentData);
       };
 
       input.addEventListener("blur", () => finish(true));
