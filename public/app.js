@@ -1065,6 +1065,16 @@ function updateCollapseAllLabel() {
   btn.textContent = anyExpanded ? "⊟ Collapse all" : "⊞ Expand all";
 }
 
+// Keep `--sticky-top` in sync with the actual header height so the sidebar /
+// notepad always sit just below the sticky header, even when buttons wrap to a
+// second line on narrower windows.
+function syncStickyTop() {
+  const header = document.querySelector("header.top");
+  if (!header) return;
+  const h = Math.ceil(header.getBoundingClientRect().height) + 16; // 16px gap
+  document.documentElement.style.setProperty("--sticky-top", h + "px");
+}
+
 function initNotepad() {
   const el = $("#notepad-content");
   if (!el) return;
@@ -1096,6 +1106,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setupAutoRefresh();
   updateFreshness(); // seed intel-freshness label from localStorage
   initNotepad();
+  syncStickyTop();
+  window.addEventListener("resize", syncStickyTop);
   fetchData(false);
   fetchRecs(false); // load cached recs from server (does NOT regenerate)
 });
