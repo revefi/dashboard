@@ -1065,6 +1065,28 @@ function updateCollapseAllLabel() {
   btn.textContent = anyExpanded ? "⊟ Collapse all" : "⊞ Expand all";
 }
 
+function initNotepad() {
+  const el = $("#notepad-content");
+  if (!el) return;
+  wireMarkdownRemarks(el, el.dataset.mdKey, {
+    placeholder: "Scratch space — markdown is welcome.",
+  });
+  // Saved-indicator hint: when the editor's blur fires (which is when
+  // wireMarkdownRemarks persists), flash a brief "saved" label.
+  const saved = $("#notepad-saved");
+  let savedTimer = null;
+  el.addEventListener(
+    "blur",
+    () => {
+      if (!saved) return;
+      saved.classList.add("show");
+      clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => saved.classList.remove("show"), 1200);
+    },
+    true /* capture so we catch the textarea's blur from inside the wrap */
+  );
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   $("#refresh-btn").addEventListener("click", () => fetchData(true));
   $("#refresh-intelligent-btn").addEventListener("click", intelligentRefresh);
@@ -1073,6 +1095,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Per-card toggle listeners are wired in wireDelegates() (toggle doesn't bubble).
   setupAutoRefresh();
   updateFreshness(); // seed intel-freshness label from localStorage
+  initNotepad();
   fetchData(false);
   fetchRecs(false); // load cached recs from server (does NOT regenerate)
 });
