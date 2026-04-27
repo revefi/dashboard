@@ -592,8 +592,8 @@ function rebuildSidebar(data) {
 
   // Wire jump-to behavior.
   $$("[data-jump]").forEach((el) => {
-    if (el._wired) return;
-    el._wired = true;
+    if (el._jumpWired) return;
+    el._jumpWired = true;
     el.addEventListener("click", (e) => {
       e.preventDefault();
       const target = document.getElementById(el.dataset.jump);
@@ -687,8 +687,8 @@ function wireDelegates() {
   // Copy buttons. Stop propagation so clicks don't toggle the parent <details>
   // when this button lives inside a <summary>.
   $$("[data-copy]").forEach((el) => {
-    if (el._wired) return;
-    el._wired = true;
+    if (el._copyWired) return;
+    el._copyWired = true;
     el.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -709,8 +709,8 @@ function wireDelegates() {
 
   // Mark-complete / Restore buttons.
   $$('[data-action="complete"], [data-action="restore"]').forEach((el) => {
-    if (el._wired) return;
-    el._wired = true;
+    if (el._actionWired) return;
+    el._actionWired = true;
     el.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -723,8 +723,8 @@ function wireDelegates() {
   // with content inside <summary> (e.g. typing Space in the remarks editable)
   // doesn't bubble up and toggle the <details> open/closed.
   $$("[data-stop-toggle]").forEach((el) => {
-    if (el._wired) return;
-    el._wired = true;
+    if (el._stopToggleWired) return;
+    el._stopToggleWired = true;
     const stop = (e) => e.stopPropagation();
     for (const evt of ["click", "mousedown", "keydown", "keypress", "keyup"]) {
       el.addEventListener(evt, stop);
@@ -735,8 +735,8 @@ function wireDelegates() {
   // override is keyed by stack_key in localStorage and takes priority over the
   // model's `stack.name` (which is Claude-generated).
   $$("[data-edit-name]").forEach((btn) => {
-    if (btn._wired) return;
-    btn._wired = true;
+    if (btn._editNameWired) return;
+    btn._editNameWired = true;
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
