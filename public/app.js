@@ -673,6 +673,40 @@ function wireDelegates() {
     }
   });
 
+  // The contenteditable inside <summary> sometimes doesn't take focus on click —
+  // <summary> grabs focus first, then Space triggers <details> activation.
+  // Belt-and-suspenders: explicitly focus the editable on mousedown, AND trap
+  // Space/Enter on summary in the capture phase if focus ended up on an editable
+  // descendant.
+  $$(".stack-remarks").forEach((el) => {
+    if (el._focusWired) return;
+    el._focusWired = true;
+    el.addEventListener("mousedown", (e) => {
+      e.stopPropagation();
+      if (document.activeElement !== el) {
+        // requestAnimationFrame to land focus AFTER the browser's own focus shift
+        requestAnimationFrame(() => el.focus());
+      }
+    });
+  });
+  $$("details.stack-card > summary").forEach((summary) => {
+    if (summary._kbTrapWired) return;
+    summary._kbTrapWired = true;
+    summary.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key !== " " && e.key !== "Enter") return;
+        const ae = document.activeElement;
+        if (ae && ae.isContentEditable && summary.contains(ae)) {
+          // Suppress the synthesized click that <summary> uses to toggle <details>.
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      },
+      true /* capture phase, runs before <summary>'s built-in handler */
+    );
+  });
+
   // Cards default to collapsed; sync the header button's label to match.
   updateCollapseAllLabel();
 }
