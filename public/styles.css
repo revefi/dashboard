@@ -289,6 +289,16 @@ h2 .muted {
   flex-wrap: wrap;
   padding-right: 20px;
 }
+/* Keep the pill column pinned to the right even when the left column has a lot
+   of content (e.g. 3+ Jira chips). The left column shrinks; the right doesn't
+   wrap below. min-width: 0 lets flex children with overflow behave correctly. */
+.stack-head > :first-child {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.stack-head > :last-child {
+  flex-shrink: 0;
+}
 .stack-name {
   font-size: 17px;
   font-weight: 700;
