@@ -614,12 +614,42 @@ function wireDelegates() {
     });
   });
 
-  // Stack remarks (contentEditable persisted to localStorage).
+  // Stack remarks (contentEditable persisted to localStorage). On first sight of
+  // a stack, we migrate any Untouched-Jira remarks for this stack's Jira keys
+  // into the stack remarks so notes you wrote before the PR existed don't get
+  // stranded. Migration is one-time per Jira key — the source entry is removed
+  // after merging, so subsequent renders don't double-migrate.
   $$(".stack-remarks").forEach((el) => {
-    const key = el.dataset.remarksKey;
-    const stored = localStorage.getItem(REMARKS_KEY_PREFIX + key);
+    const stackKey = el.dataset.remarksKey;
+    const storeKey = REMARKS_KEY_PREFIX + stackKey;
+    let stored = localStorage.getItem(storeKey);
+
+    const card = el.closest(".stack-card");
+    const stack = card
+      ? currentData?.stacks?.find((s) => s.stack_key === card.dataset.stackKey)
+      : null;
+    const sep =
+      '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">';
+    if (stack && Array.isArray(stack.jira_keys)) {
+      const migrated = [];
+      for (const jk of stack.jira_keys) {
+        const jiraStored = localStorage.getItem(JIRA_REMARKS_PREFIX + jk);
+        if (jiraStored && jiraStored.trim()) {
+          migrated.push(
+            `<div class="migrated-from">↳ from ${esc(jk)}</div>${jiraStored}`
+          );
+          localStorage.removeItem(JIRA_REMARKS_PREFIX + jk);
+        }
+      }
+      if (migrated.length > 0) {
+        const merged = migrated.join(sep);
+        stored = stored ? `${stored}${sep}${merged}` : merged;
+        localStorage.setItem(storeKey, stored);
+      }
+    }
+
     if (stored) el.innerHTML = stored;
-    wireRichText(el, REMARKS_KEY_PREFIX + key);
+    wireRichText(el, storeKey);
   });
 
   // Jira row remarks + working checkbox.

@@ -691,6 +691,12 @@ details.upstream-pr-list .stack-row {
   color: var(--primary);
   text-decoration: underline;
 }
+.stack-remarks .migrated-from {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+  margin-bottom: 2px;
+}
 .stale-worktrees {
   background: var(--card);
   border: 1px solid var(--border);
