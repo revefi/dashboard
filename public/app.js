@@ -210,10 +210,10 @@ function renderStackCard(stack, isMerged, idx) {
     stack.stack_key
   )}`;
   return `
-    <details id="${anchorId}" class="card stack-card ${
+    <div id="${anchorId}" class="card stack-card ${
     completed ? "merged-card" : ""
   }" data-stack-key="${esc(stack.stack_key)}">
-      <summary>
+      <div class="stack-summary" data-toggle-card>
         <div class="stack-head">
           <div>
             <div class="stack-name"><span class="stack-num-h">#${idx}</span>${esc(
@@ -261,7 +261,7 @@ function renderStackCard(stack, isMerged, idx) {
         </div>`
             : ""
         }
-      </summary>
+      </div>
       <div class="stack-body">
         ${completed ? "" : renderUpstreamBanner(stack)}
         ${
@@ -279,7 +279,7 @@ function renderStackCard(stack, isMerged, idx) {
           <div class="stack-row trunk"><span class="stack-link" style="cursor:default">main (trunk)</span></div>
         </div>
       </div>
-    </details>`;
+    </div>`;
 }
 
 function renderStaleWorktrees(list) {
@@ -584,20 +584,34 @@ function rebuildSidebar(data) {
       e.preventDefault();
       const target = document.getElementById(el.dataset.jump);
       if (!target) return;
-      // If targeting a closed stack-card, open it before scrolling.
-      if (target.tagName === "DETAILS" && !target.open) target.open = true;
+      // If targeting a collapsed stack-card, expand it before scrolling.
+      if (target.classList.contains("stack-card")) {
+        target.classList.add("expanded");
+      }
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 }
 
 function wireDelegates() {
-  // Stack-card toggle listeners — keep the "Collapse/Expand all" label in sync
-  // when individual cards open/close. `toggle` doesn't bubble so we attach per-card.
-  $$("details.stack-card").forEach((el) => {
+  // Stack-card toggle: click the .stack-summary to flip the `expanded` class on
+  // the parent .stack-card. We use a custom toggle (not <details>/<summary>)
+  // because contenteditable inside <summary> has too many focus / Space-key
+  // edge cases to fight with.
+  $$("[data-toggle-card]").forEach((el) => {
     if (el._toggleWired) return;
     el._toggleWired = true;
-    el.addEventListener("toggle", updateCollapseAllLabel);
+    el.addEventListener("click", (e) => {
+      // Defensive: if the click came from a child that wasn't supposed to
+      // bubble (e.g. an interactive element inside the summary), bail. Buttons
+      // and copy chips already call stopPropagation, but if we ever miss one,
+      // this skips the toggle for any element that has its own onclick.
+      if (e.target.closest("[data-stop-toggle]")) return;
+      const card = el.closest(".stack-card");
+      if (!card) return;
+      card.classList.toggle("expanded");
+      updateCollapseAllLabel();
+    });
   });
 
   // Stack remarks (contentEditable persisted to localStorage).
@@ -671,40 +685,6 @@ function wireDelegates() {
     for (const evt of ["click", "mousedown", "keydown", "keypress", "keyup"]) {
       el.addEventListener(evt, stop);
     }
-  });
-
-  // The contenteditable inside <summary> sometimes doesn't take focus on click —
-  // <summary> grabs focus first, then Space triggers <details> activation.
-  // Belt-and-suspenders: explicitly focus the editable on mousedown, AND trap
-  // Space/Enter on summary in the capture phase if focus ended up on an editable
-  // descendant.
-  $$(".stack-remarks").forEach((el) => {
-    if (el._focusWired) return;
-    el._focusWired = true;
-    el.addEventListener("mousedown", (e) => {
-      e.stopPropagation();
-      if (document.activeElement !== el) {
-        // requestAnimationFrame to land focus AFTER the browser's own focus shift
-        requestAnimationFrame(() => el.focus());
-      }
-    });
-  });
-  $$("details.stack-card > summary").forEach((summary) => {
-    if (summary._kbTrapWired) return;
-    summary._kbTrapWired = true;
-    summary.addEventListener(
-      "keydown",
-      (e) => {
-        if (e.key !== " " && e.key !== "Enter") return;
-        const ae = document.activeElement;
-        if (ae && ae.isContentEditable && summary.contains(ae)) {
-          // Suppress the synthesized click that <summary> uses to toggle <details>.
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      },
-      true /* capture phase, runs before <summary>'s built-in handler */
-    );
   });
 
   // Cards default to collapsed; sync the header button's label to match.
@@ -901,20 +881,20 @@ function setupAutoRefresh() {
 
 // ---------- init ----------
 function toggleAllStacks() {
-  const cards = $$("details.stack-card");
+  const cards = $$(".stack-card");
   if (cards.length === 0) return;
-  // If any are open, collapse all. Otherwise, expand all.
-  const anyOpen = [...cards].some((c) => c.open);
-  for (const c of cards) c.open = !anyOpen;
+  // If any are expanded, collapse all. Otherwise, expand all.
+  const anyExpanded = [...cards].some((c) => c.classList.contains("expanded"));
+  for (const c of cards) c.classList.toggle("expanded", !anyExpanded);
   updateCollapseAllLabel();
 }
 
 function updateCollapseAllLabel() {
   const btn = $("#collapse-all-btn");
   if (!btn) return;
-  const cards = $$("details.stack-card");
-  const anyOpen = [...cards].some((c) => c.open);
-  btn.textContent = anyOpen ? "⊟ Collapse all" : "⊞ Expand all";
+  const cards = $$(".stack-card");
+  const anyExpanded = [...cards].some((c) => c.classList.contains("expanded"));
+  btn.textContent = anyExpanded ? "⊟ Collapse all" : "⊞ Expand all";
 }
 
 document.addEventListener("DOMContentLoaded", () => {

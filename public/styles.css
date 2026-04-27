@@ -241,24 +241,20 @@ h2 .muted {
   margin-bottom: 16px;
   box-shadow: var(--shadow);
 }
-details.stack-card {
+.stack-card {
   padding: 0;
 }
-details.stack-card > summary {
-  list-style: none;
+.stack-card > .stack-summary {
   cursor: pointer;
   padding: 20px 22px;
   border-radius: 14px;
   position: relative;
 }
-details.stack-card[open] > summary {
+.stack-card.expanded > .stack-summary {
   border-radius: 14px 14px 0 0;
   border-bottom: 1px solid var(--border);
 }
-details.stack-card > summary::-webkit-details-marker {
-  display: none;
-}
-details.stack-card > summary::after {
+.stack-card > .stack-summary::after {
   content: "▾";
   position: absolute;
   right: 22px;
@@ -267,17 +263,21 @@ details.stack-card > summary::after {
   font-size: 12px;
   transition: transform 0.15s;
 }
-details.stack-card:not([open]) > summary::after {
+.stack-card:not(.expanded) > .stack-summary::after {
   transform: rotate(-90deg);
 }
-details.stack-card > .stack-body {
+.stack-card > .stack-body {
   padding: 16px 22px 20px;
+  display: none;
 }
-details.stack-card > summary:hover {
+.stack-card.expanded > .stack-body {
+  display: block;
+}
+.stack-card > .stack-summary:hover {
   background: rgba(0, 0, 0, 0.02);
 }
 @media (prefers-color-scheme: dark) {
-  details.stack-card > summary:hover {
+  .stack-card > .stack-summary:hover {
     background: rgba(255, 255, 255, 0.02);
   }
 }
