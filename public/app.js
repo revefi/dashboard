@@ -269,9 +269,9 @@ function renderStackCard(stack, isMerged, idx) {
             ? `
         <div class="stack-remarks-wrap" data-stop-toggle>
           <div class="label">📝 Remarks</div>
-          <div class="stack-remarks" contenteditable="true" spellcheck="false" data-remarks-key="${esc(
-            stack.stack_key
-          )}"></div>
+          <div class="stack-remarks" data-md-key="${esc(
+            REMARKS_KEY_PREFIX + stack.stack_key
+          )}" data-stack-key="${esc(stack.stack_key)}"></div>
         </div>`
             : ""
         }
@@ -459,7 +459,9 @@ function renderUntouchedRows() {
       ${renderSprintCell(t.sprint)}
       <td>${esc(t.updated_label || "")}</td>
       <td><label class="toggle"><input type="checkbox" class="working-cb"><span class="slider"></span></label></td>
-      <td><div class="remarks" contenteditable="true" spellcheck="false"></div></td>
+      <td><div class="remarks" data-md-key="${esc(
+        JIRA_REMARKS_PREFIX + t.key
+      )}"></div></td>
     </tr>`
     )
     .join("");
@@ -628,42 +630,39 @@ function wireDelegates() {
     });
   });
 
-  // Stack remarks (contentEditable persisted to localStorage). On first sight of
+  // Stack remarks (markdown persisted to localStorage). On first sight of
   // a stack, we migrate any Untouched-Jira remarks for this stack's Jira keys
   // into the stack remarks so notes you wrote before the PR existed don't get
   // stranded. Migration is one-time per Jira key — the source entry is removed
   // after merging, so subsequent renders don't double-migrate.
   $$(".stack-remarks").forEach((el) => {
-    const stackKey = el.dataset.remarksKey;
-    const storeKey = REMARKS_KEY_PREFIX + stackKey;
-    let stored = localStorage.getItem(storeKey);
+    const storeKey = el.dataset.mdKey;
+    const stackKey = el.dataset.stackKey;
+    let stored = localStorage.getItem(storeKey) || "";
 
     const card = el.closest(".stack-card");
     const stack = card
       ? currentData?.stacks?.find((s) => s.stack_key === card.dataset.stackKey)
       : null;
-    const sep =
-      '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">';
     if (stack && Array.isArray(stack.jira_keys)) {
       const migrated = [];
       for (const jk of stack.jira_keys) {
         const jiraStored = localStorage.getItem(JIRA_REMARKS_PREFIX + jk);
         if (jiraStored && jiraStored.trim()) {
-          migrated.push(
-            `<div class="migrated-from">↳ from ${esc(jk)}</div>${jiraStored}`
-          );
+          migrated.push(`*↳ from ${jk}*\n\n${jiraStored}`);
           localStorage.removeItem(JIRA_REMARKS_PREFIX + jk);
         }
       }
       if (migrated.length > 0) {
-        const merged = migrated.join(sep);
-        stored = stored ? `${stored}${sep}${merged}` : merged;
+        const merged = migrated.join("\n\n---\n\n");
+        stored = stored ? `${stored}\n\n---\n\n${merged}` : merged;
         localStorage.setItem(storeKey, stored);
       }
     }
 
-    if (stored) el.innerHTML = stored;
-    wireRichText(el, storeKey);
+    wireMarkdownRemarks(el, storeKey, {
+      placeholder: "Add a note for this stack…",
+    });
   });
 
   // Jira row remarks + working checkbox.
@@ -679,9 +678,9 @@ function wireDelegates() {
       row.classList.toggle("working", cb.checked);
     });
     const rem = row.querySelector(".remarks");
-    const stored = localStorage.getItem(JIRA_REMARKS_PREFIX + k);
-    if (stored) rem.innerHTML = stored;
-    wireRichText(rem, JIRA_REMARKS_PREFIX + k);
+    if (rem) {
+      wireMarkdownRemarks(rem, rem.dataset.mdKey, { placeholder: "Add note…" });
+    }
   });
 
   // Copy buttons. Stop propagation so clicks don't toggle the parent <details>
@@ -799,57 +798,118 @@ function wireDelegates() {
   updateCollapseAllLabel();
 }
 
-function wireRichText(el, persistKey) {
-  el.addEventListener("paste", (e) => {
-    e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData).getData(
-      "text/plain"
-    );
-    document.execCommand("insertText", false, text);
-  });
-  el.addEventListener("blur", () => {
-    autoLinkify(el);
-    localStorage.setItem(persistKey, el.innerHTML);
-  });
-  el.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) return;
-      const url = prompt("Link URL:", "https://");
-      if (url) document.execCommand("createLink", false, url);
-    }
-  });
+// Markdown helpers. We store raw markdown in localStorage and render via the
+// `marked` library on view. Editing swaps the rendered <div> for a <textarea>
+// holding the raw text. Re-renders on blur. Detects existing legacy HTML and
+// passes it through (marked allows inline HTML by default).
+function renderMarkdown(text) {
+  if (!text) return "";
+  if (typeof window.marked === "undefined") {
+    // marked.min.js may still be loading on first paint — fall back to plain text.
+    return esc(text).replace(/\n/g, "<br>");
+  }
+  // marked.parse handles GitHub-flavored markdown by default in v15.
+  return window.marked.parse(text, { breaks: true, gfm: true });
 }
 
-function autoLinkify(el) {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  const urlRe = /(https?:\/\/[^\s<>]+)/g;
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  for (const node of nodes) {
-    if (node.parentElement && node.parentElement.closest("a")) continue;
-    const text = node.nodeValue;
-    if (!urlRe.test(text)) continue;
-    urlRe.lastIndex = 0;
-    const frag = document.createDocumentFragment();
-    let last = 0,
-      m;
-    while ((m = urlRe.exec(text)) !== null) {
-      if (m.index > last)
-        frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-      const a = document.createElement("a");
-      a.href = m[0];
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.textContent = m[0];
-      frag.appendChild(a);
-      last = m.index + m[0].length;
-    }
-    if (last < text.length)
-      frag.appendChild(document.createTextNode(text.slice(last)));
-    node.parentNode.replaceChild(frag, node);
+function wireMarkdownRemarks(wrap, persistKey, opts = {}) {
+  // Idempotent per element instance — call after every render.
+  if (wrap._mdWired) return;
+  wrap._mdWired = true;
+
+  const placeholder = opts.placeholder || "Add a note…";
+  // Build two children: a rendered view, and a textarea (hidden until focused).
+  // We use the wrap element directly as the container so caller styles still apply.
+  const stored = localStorage.getItem(persistKey) || "";
+
+  const view = document.createElement("div");
+  view.className = "md-view";
+  if (stored) view.innerHTML = renderMarkdown(stored);
+  else view.innerHTML = `<span class="md-placeholder">${esc(placeholder)}</span>`;
+
+  const editor = document.createElement("textarea");
+  editor.className = "md-editor";
+  editor.spellcheck = false;
+  editor.hidden = true;
+  editor.value = stored;
+  editor.placeholder = placeholder;
+  editor.rows = Math.max(1, stored.split("\n").length);
+
+  // Edit-mode entry: clicking the rendered view swaps to textarea, focused.
+  view.addEventListener("click", (e) => {
+    // Let actual link clicks work normally — don't grab them as edit triggers.
+    if (e.target.closest("a")) return;
+    e.stopPropagation();
+    enterEdit();
+  });
+
+  function autoSize() {
+    editor.style.height = "auto";
+    editor.style.height = editor.scrollHeight + "px";
   }
+  function enterEdit() {
+    editor.value = localStorage.getItem(persistKey) || "";
+    view.hidden = true;
+    editor.hidden = false;
+    autoSize();
+    editor.focus();
+    // Place caret at end.
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+  }
+  function exitEdit() {
+    const next = editor.value;
+    if (next === "") localStorage.removeItem(persistKey);
+    else localStorage.setItem(persistKey, next);
+    view.innerHTML = next
+      ? renderMarkdown(next)
+      : `<span class="md-placeholder">${esc(placeholder)}</span>`;
+    editor.hidden = true;
+    view.hidden = false;
+  }
+
+  editor.addEventListener("blur", exitEdit);
+  editor.addEventListener("input", autoSize);
+  editor.addEventListener("keydown", (e) => {
+    // Esc commits and exits (same as blur). Cmd/Ctrl+Enter also exits.
+    if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter")) {
+      e.preventDefault();
+      editor.blur();
+      return;
+    }
+    // Markdown shortcuts: Cmd+B / Cmd+I / Cmd+K wrap the selection.
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+    const k = e.key.toLowerCase();
+    if (k === "b") {
+      e.preventDefault();
+      wrapSelection(editor, "**", "**");
+    } else if (k === "i") {
+      e.preventDefault();
+      wrapSelection(editor, "*", "*");
+    } else if (k === "k") {
+      e.preventDefault();
+      const url = prompt("Link URL:", "https://");
+      if (url) {
+        const { selectionStart: s, selectionEnd: e2, value } = editor;
+        const text = value.slice(s, e2) || "link";
+        editor.setRangeText(`[${text}](${url})`, s, e2, "end");
+        autoSize();
+      }
+    }
+  });
+
+  // Replace wrap's previous contents with our two children (preserves classes).
+  wrap.innerHTML = "";
+  wrap.appendChild(view);
+  wrap.appendChild(editor);
+}
+
+function wrapSelection(textarea, before, after) {
+  const { selectionStart: s, selectionEnd: e, value } = textarea;
+  const text = value.slice(s, e);
+  textarea.setRangeText(`${before}${text}${after}`, s, e, "end");
+  // Fire input so autoSize runs.
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 // ---------- recommendations ----------
