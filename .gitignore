@@ -1,0 +1,16 @@
+# Claude-generated caches (regenerate on-demand; machine-specific)
+cache/
+
+# Runtime temp file the server writes for graphql queries
+.gql-tmp.graphql
+
+# Local env override (creds belong in ~/.zshrc, not the repo)
+.env
+.env.local
+
+# OS / editor noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+node_modules/

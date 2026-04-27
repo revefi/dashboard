@@ -1,0 +1,1223 @@
+#!/usr/bin/env node
+// Personal live dashboard server. Zero deps. Run: `node server.js`
+// Listens on http://localhost:7787 — gitignored, never committed.
+
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const { exec, execFile, spawn } = require("child_process");
+const { promisify } = require("util");
+
+const execP = promisify(exec);
+const execFileP = promisify(execFile);
+
+const REPO = "/Users/varun/Desktop/workspace/rcode";
+const SESSIONS_ROOT = "/Users/varun/.claude/projects";
+const MAIN_SESSIONS_DIR = `${SESSIONS_ROOT}/-Users-varun-Desktop-workspace-rcode`;
+const PORT = parseInt(process.env.PORT || "7787", 10);
+const CACHE_TTL_MS = 30_000;
+const STATIC_DIR = path.join(__dirname, "public");
+const CACHE_DIR = path.join(__dirname, "cache");
+const RECS_CACHE_FILE = path.join(CACHE_DIR, "recommendations.json");
+
+// ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN are read from the shell environment
+// (set them in ~/.zshrc — see README).
+
+if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+let cache = { ts: 0, data: null, building: null };
+
+// ---------- shell helpers ----------
+async function sh(cmd, opts = {}) {
+  const { stdout } = await execP(cmd, {
+    cwd: REPO,
+    maxBuffer: 50 * 1024 * 1024,
+    ...opts,
+  });
+  return stdout;
+}
+
+async function shRetry(cmd, opts = {}, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await sh(cmd, opts);
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1)
+        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+// ---------- gt log parsing ----------
+function parseGtLog(text) {
+  const lines = text.split("\n");
+  const parsed = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    // Match: leading whitespace, glyph (↱◯◉), optional `─┴┘├` connectors, optional `$`, branch, rest.
+    const m = line.match(/^(\s*)[↱◯◉][─┴┘├│\s]*\$?\s*(\S+)\s*(.*)$/);
+    if (!m) continue;
+    const depth = m[1].length;
+    const branch = m[2];
+    const rest = (m[3] || "").trim();
+    const flags = (rest.match(/\(([^)]+)\)/g) || []).map((s) =>
+      s.slice(1, -1).trim()
+    );
+    // Skip "(<worktree-name>)" annotations from flags by matching against a known worktree set later.
+    parsed.push({ depth, branch, flags });
+  }
+  return parsed;
+}
+
+function buildStacksFromGtLog(parsedLines) {
+  // Leaves are lines whose previous line has equal-or-less depth (top-of-stack).
+  const stacks = [];
+  for (let i = 0; i < parsedLines.length; i++) {
+    const cur = parsedLines[i];
+    if (cur.branch === "main") continue;
+    const prev = parsedLines[i - 1];
+    const isLeaf = !prev || prev.depth <= cur.depth;
+    if (!isLeaf) continue;
+
+    // Walk down: ancestors are subsequent lines with strictly smaller depth than current min.
+    const chain = [cur];
+    let minDepth = cur.depth;
+    for (let j = i + 1; j < parsedLines.length; j++) {
+      const nxt = parsedLines[j];
+      if (nxt.depth < minDepth) {
+        chain.push(nxt);
+        minDepth = nxt.depth;
+        if (nxt.branch === "main") break;
+      }
+    }
+    // Drop trunk from chain (we render it separately).
+    const trimmed = chain.filter((b) => b.branch !== "main");
+    if (trimmed.length === 0) continue;
+    stacks.push(trimmed);
+  }
+  return stacks;
+}
+
+// ---------- worktrees ----------
+async function fetchWorktrees() {
+  const stdout = await sh("git worktree list --porcelain");
+  const out = [];
+  let cur = {};
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("worktree ")) cur = { path: line.slice(9) };
+    else if (line.startsWith("branch "))
+      cur.branch = line.slice(7).replace(/^refs\/heads\//, "");
+    else if (line === "") {
+      if (cur.path) out.push(cur);
+      cur = {};
+    }
+  }
+  if (cur.path) out.push(cur);
+  return out
+    .filter((w) => w.path.includes("/.claude/worktrees/"))
+    .map((w) => ({
+      ...w,
+      name: path.basename(w.path),
+    }));
+}
+
+// ---------- PRs ----------
+const GH_REPO_FLAG = "--repo revefi/rcode";
+let cachedLogin = null;
+
+async function getLogin() {
+  if (cachedLogin) return cachedLogin;
+  const stdout = await shRetry(`gh api user --jq .login`);
+  cachedLogin = stdout.trim();
+  return cachedLogin;
+}
+
+async function fetchOpenPRs() {
+  // gh's --author filter returns 0 results when invoked under Node child_process for reasons
+  // I cannot pin down — works fine from interactive shell. Workaround: fetch all open PRs via
+  // gh pr list (no filter) and filter to my login client-side.
+  const login = await getLogin();
+  const stdout = await shRetry(
+    `gh pr list ${GH_REPO_FLAG} --state open --limit 200 ` +
+      `--json number,title,url,isDraft,createdAt,updatedAt,headRefName,baseRefName,reviewDecision,author`
+  );
+  const all = JSON.parse(stdout);
+  return all.filter((p) => p.author?.login === login);
+}
+
+async function fetchRecentMergedPRs() {
+  const stdout = await shRetry(
+    `gh api "repos/revefi/rcode/pulls?state=closed&per_page=50" ` +
+      `--jq '[.[] | select(.user.login | test("varun"; "i")) | select(.merged_at != null) | ` +
+      `{n: .number, h: .head.ref, b: .base.ref, m: .merged_at, t: .title}]'`
+  );
+  return JSON.parse(stdout || "[]");
+}
+
+async function fetchAnyPR(branch) {
+  try {
+    const stdout = await shRetry(
+      `gh pr list ${GH_REPO_FLAG} --search "head:${branch}" --state all --limit 1 ` +
+        `--json number,state,title,url,headRefName,author`
+    );
+    const arr = JSON.parse(stdout);
+    return arr[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPRMeta(num) {
+  try {
+    const stdout = await shRetry(
+      `gh pr view ${num} ${GH_REPO_FLAG} --json number,title,url,reviewDecision,headRefName,updatedAt,author,state`
+    );
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+}
+
+const REVIEW_THREAD_QUERY = `
+query($owner: String!, $name: String!, $num: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $num) {
+      reviewThreads(first: 50) {
+        nodes {
+          isResolved
+          comments(first: 1) { nodes { author { login } } }
+        }
+      }
+    }
+  }
+}`;
+
+async function fetchReviewThreads(num) {
+  try {
+    const queryFile = path.join(__dirname, ".gql-tmp.graphql");
+    fs.writeFileSync(queryFile, REVIEW_THREAD_QUERY);
+    const stdout = await sh(
+      `gh api graphql -F owner=revefi -F name=rcode -F num=${num} -F query=@${queryFile} ` +
+        `--jq '.data.repository.pullRequest.reviewThreads.nodes ` +
+        `| map(select(.isResolved == false)) ` +
+        `| group_by(.comments.nodes[0].author.login == "claude") ` +
+        `| map({bot: (.[0].comments.nodes[0].author.login == "claude"), n: length})'`
+    );
+    const groups = JSON.parse(stdout || "[]");
+    let h = 0,
+      b = 0;
+    for (const g of groups) {
+      if (g.bot) b += g.n;
+      else h += g.n;
+    }
+    return { human: h, bot: b };
+  } catch {
+    return { human: 0, bot: 0 };
+  }
+}
+
+// ---------- Claude CLI helper ----------
+function callClaude(prompt, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const args = ["-p", "--output-format", "text"];
+    if (opts.model !== false)
+      args.push("--model", opts.model || "claude-haiku-4-5");
+    if (opts.allowedTools) args.push("--allowedTools", opts.allowedTools);
+    const proc = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "",
+      stderr = "";
+    proc.stdout.on("data", (d) => (stdout += d));
+    proc.stderr.on("data", (d) => (stderr += d));
+    const timer = setTimeout(() => {
+      proc.kill("SIGTERM");
+      reject(new Error("claude timed out after 90s"));
+    }, opts.timeoutMs || 90_000);
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(`claude exit ${code}: ${stderr.slice(0, 500)}`));
+    });
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+  });
+}
+
+// Try to extract a JSON object/array from Claude's text response (it may wrap with prose or fences).
+function parseJsonLoose(text) {
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) text = fenced[1];
+  const firstBrace = Math.min(
+    ...["{", "["].map((c) => {
+      const i = text.indexOf(c);
+      return i === -1 ? Infinity : i;
+    })
+  );
+  if (!isFinite(firstBrace)) return null;
+  // Find matching close — naive but works since Claude output is usually clean.
+  const candidate = text.slice(firstBrace);
+  // Try progressively shorter slices until JSON parses.
+  for (let end = candidate.length; end > 0; end--) {
+    try {
+      return JSON.parse(candidate.slice(0, end));
+    } catch {}
+  }
+  return null;
+}
+
+// Disk cache helper with TTL.
+function loadDiskCache(file) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (raw.expiresAt && new Date(raw.expiresAt).getTime() < Date.now())
+      return null;
+    return raw.data;
+  } catch {
+    return null;
+  }
+}
+function saveDiskCache(file, data, ttlMs) {
+  try {
+    const payload = {
+      data,
+      expiresAt: ttlMs ? new Date(Date.now() + ttlMs).toISOString() : null,
+    };
+    fs.writeFileSync(file, JSON.stringify(payload, null, 2));
+  } catch (err) {
+    console.warn(`[disk-cache] save failed for ${file}:`, err.message);
+  }
+}
+
+const STACK_NAMES_CACHE_FILE = path.join(CACHE_DIR, "stack-names.json");
+const STACK_NAMES_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (regenerates on PR-set change anyway)
+
+// ---------- Jira ----------
+const JIRA_BASE = "https://revefi.atlassian.net";
+
+function jiraConfigured() {
+  return !!(process.env.ATLASSIAN_EMAIL && process.env.ATLASSIAN_API_TOKEN);
+}
+
+async function jiraGet(pathStr) {
+  if (!jiraConfigured()) return null;
+  const auth = Buffer.from(
+    `${process.env.ATLASSIAN_EMAIL}:${process.env.ATLASSIAN_API_TOKEN}`
+  ).toString("base64");
+  const res = await fetch(`${JIRA_BASE}${pathStr}`, {
+    headers: { Authorization: `Basic ${auth}`, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Jira ${pathStr}: ${res.status}`);
+  return res.json();
+}
+
+async function jiraPost(pathStr, body) {
+  if (!jiraConfigured()) return null;
+  const auth = Buffer.from(
+    `${process.env.ATLASSIAN_EMAIL}:${process.env.ATLASSIAN_API_TOKEN}`
+  ).toString("base64");
+  const res = await fetch(`${JIRA_BASE}${pathStr}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Jira ${pathStr}: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// ---------- Jira (direct REST) ----------
+// Fast (~50ms/ticket), so we fetch fresh on every buildModel — no disk cache.
+// Without ATLASSIAN_* in the env, all calls return empty and the UI shows a
+// "Jira not configured" hint.
+
+function parseActiveSprint(field) {
+  // Sprint custom field: array of sprint objects with id/name/state/startDate/endDate.
+  if (!Array.isArray(field)) return null;
+  const chosen =
+    field.find((s) => s && s.state === "active") ||
+    field[field.length - 1] ||
+    null;
+  if (!chosen) return null;
+  return {
+    id: chosen.id,
+    name: chosen.name,
+    state: chosen.state,
+    start_date: chosen.startDate || null,
+    end_date: chosen.endDate || null,
+  };
+}
+
+async function fetchJiraTickets(keys) {
+  if (keys.length === 0 || !jiraConfigured()) return {};
+  const fields = "summary,issuetype,status,priority,updated";
+  const entries = await Promise.all(
+    keys.map(async (key) => {
+      try {
+        const data = await jiraGet(
+          `/rest/api/3/issue/${encodeURIComponent(key)}?fields=${fields}`
+        );
+        if (!data) return null;
+        return [
+          key,
+          {
+            key: data.key,
+            summary: data.fields.summary,
+            type: data.fields.issuetype?.name || "Task",
+            status: data.fields.status?.name || "",
+            priority: data.fields.priority?.name || "Medium",
+            updated: data.fields.updated,
+          },
+        ];
+      } catch {
+        return null;
+      }
+    })
+  );
+  return Object.fromEntries(entries.filter(Boolean));
+}
+
+async function fetchJiraTicket(key) {
+  const map = await fetchJiraTickets([key]);
+  return map[key] || null;
+}
+
+async function fetchOpenJiraTickets() {
+  if (!jiraConfigured()) return [];
+  try {
+    const data = await jiraPost(`/rest/api/3/search/jql`, {
+      jql: "assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC",
+      // customfield_10020 = "Sprint" on revefi.atlassian.net.
+      fields: [
+        "summary",
+        "issuetype",
+        "status",
+        "priority",
+        "updated",
+        "created",
+        "customfield_10020",
+      ],
+      maxResults: 50,
+    });
+    if (!data || !data.issues) return [];
+    return data.issues.map((i) => ({
+      key: i.key,
+      summary: i.fields.summary,
+      type: i.fields.issuetype?.name || "Task",
+      status: i.fields.status?.name || "",
+      priority: i.fields.priority?.name || "Medium",
+      updated: i.fields.updated,
+      created: i.fields.created,
+      sprint: parseActiveSprint(i.fields.customfield_10020),
+    }));
+  } catch (err) {
+    console.warn("[jira] fetchOpenJiraTickets failed:", err.message);
+    return [];
+  }
+}
+
+// ---------- session scoring ----------
+function listSessions(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".jsonl"))
+    .map((f) => ({
+      sid: f.slice(0, -".jsonl".length),
+      file: path.join(dir, f),
+    }));
+}
+
+async function scoreSessionsForStack(keywords, worktreeName) {
+  const dirs = [MAIN_SESSIONS_DIR];
+  if (worktreeName) {
+    dirs.push(
+      `${SESSIONS_ROOT}/-Users-varun-Desktop-workspace-rcode--claude-worktrees-${worktreeName}`
+    );
+  }
+  const pat = keywords
+    .filter(Boolean)
+    .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  if (!pat) return null;
+
+  const results = [];
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) continue;
+    for (const { sid, file } of listSessions(dir)) {
+      try {
+        const { stdout } = await execP(
+          `grep -cE '${pat.replace(/'/g, `'\\''`)}' '${file.replace(
+            /'/g,
+            `'\\''`
+          )}'`
+        );
+        const count = parseInt(stdout.trim(), 10) || 0;
+        if (count > 0) {
+          const stat = fs.statSync(file);
+          results.push({ sid, count, mtime: stat.mtimeMs, dir });
+        }
+      } catch {
+        /* grep returns 1 when no matches */
+      }
+    }
+  }
+  if (results.length === 0) return null;
+  results.sort((a, b) => b.count - a.count || b.mtime - a.mtime);
+  const top = results[0];
+  const isWorktreeDir = top.dir !== MAIN_SESSIONS_DIR;
+  return {
+    sid: top.sid,
+    in_worktree: isWorktreeDir,
+    worktree_name: isWorktreeDir ? worktreeName : null,
+  };
+}
+
+// ---------- title parsing ----------
+function parseTitle(title) {
+  // Extract [REV-XXXX] or [NO-JIRA] and [Part N] prefixes, return remainder.
+  let body = title;
+  let jiraTag = null,
+    partTag = null;
+  const jm = body.match(/^\[(REV-\d+|NO-JIRA)\]\s*/);
+  if (jm) {
+    jiraTag = jm[1];
+    body = body.slice(jm[0].length);
+  }
+  const pm = body.match(/^\[(Part [^\]]+)\]\s*/);
+  if (pm) {
+    partTag = `[${pm[1]}]`;
+    body = body.slice(pm[0].length);
+  }
+  return { jira_tag: jiraTag, part_tag: partTag, title: body.trim() };
+}
+
+function relTime(iso) {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  const ageDays = (Date.now() - then) / 86_400_000;
+  if (ageDays < 1) return "today";
+  return `${Math.floor(ageDays)}d ago`;
+}
+
+function deriveStatus(decision, isBottom, isUserPR) {
+  if (!isUserPR) {
+    if (decision === "APPROVED") return { label: "Approved", cls: "ok" };
+    if (decision === "CHANGES_REQUESTED")
+      return { label: "Changes requested", cls: "warn" };
+    return { label: "Needs review", cls: "primary" };
+  }
+  if (decision === "APPROVED")
+    return isBottom
+      ? { label: "Approved", cls: "ok" }
+      : { label: "Waiting on downstream", cls: "ok" };
+  if (decision === "CHANGES_REQUESTED")
+    return { label: "Changes requested", cls: "warn" };
+  return { label: "Needs review", cls: "primary" };
+}
+
+// ---------- model assembly ----------
+async function buildModel() {
+  const [gtLogText, openPRs, mergedPRs, worktrees] = await Promise.all([
+    sh("gt log short --no-interactive --classic"),
+    fetchOpenPRs(),
+    fetchRecentMergedPRs(),
+    fetchWorktrees(),
+  ]);
+
+  const parsedLines = parseGtLog(gtLogText);
+  const rawStacks = buildStacksFromGtLog(parsedLines);
+
+  const branchToOpenPR = new Map(openPRs.map((p) => [p.headRefName, p]));
+  const branchToMergedPR = new Map(mergedPRs.map((p) => [p.h, p]));
+  const worktreeNameSet = new Set(worktrees.map((w) => w.name));
+  const worktreeBranchToWT = new Map(worktrees.map((w) => [w.branch, w]));
+
+  // Partition each stack into user_segment (top, has user PRs) vs upstream_segment (below).
+  const enrichedStacks = [];
+  for (const chain of rawStacks) {
+    // chain is leaf-first.
+    const userBranches = [];
+    const upstreamBranches = [];
+    let inUserSegment = true;
+    for (const b of chain) {
+      const openPR = branchToOpenPR.get(b.branch);
+      const isUserBranch = !!openPR;
+      if (inUserSegment && isUserBranch) {
+        userBranches.push({ ...b, pr: openPR, isUser: true });
+      } else if (inUserSegment && !isUserBranch) {
+        // Could be merged user PR (in-stack history). Keep walking but switch to upstream once we hit non-user.
+        const merged = branchToMergedPR.get(b.branch);
+        if (merged) {
+          // Recently merged user PR — still user segment.
+          userBranches.push({ ...b, pr: merged, isUser: true, isMerged: true });
+        } else {
+          inUserSegment = false;
+          upstreamBranches.push(b);
+        }
+      } else {
+        upstreamBranches.push(b);
+      }
+    }
+    if (userBranches.length === 0) continue;
+    if (!userBranches.some((u) => u.pr && !u.isMerged)) continue;
+
+    enrichedStacks.push({ userBranches, upstreamBranches, allBranches: chain });
+  }
+
+  // Look up review decisions for upstream branches that have open PRs.
+  const upstreamLookups = new Map();
+  for (const s of enrichedStacks) {
+    for (const ub of s.upstreamBranches) {
+      // Find any open PR for this branch (could be by another author).
+      // Cheap lookup via gh pr list --search head:<branch>.
+      if (!upstreamLookups.has(ub.branch)) {
+        upstreamLookups.set(ub.branch, fetchAnyPR(ub.branch));
+      }
+    }
+  }
+  const upstreamPRMap = new Map();
+  for (const [branch, p] of upstreamLookups) {
+    const result = await p;
+    if (result && result.state === "OPEN") upstreamPRMap.set(branch, result);
+  }
+  // Fetch full meta (review decisions) for each upstream PR.
+  const upstreamMetaMap = new Map();
+  await Promise.all(
+    [...upstreamPRMap.values()].map(async (pr) => {
+      const meta = await fetchPRMeta(pr.number);
+      if (meta) upstreamMetaMap.set(pr.headRefName, meta);
+    })
+  );
+
+  // Fetch review threads for all user PRs.
+  const allUserPRNums = enrichedStacks.flatMap((s) =>
+    s.userBranches.filter((u) => u.pr && !u.isMerged).map((u) => u.pr.number)
+  );
+  const threadCounts = new Map();
+  await Promise.all(
+    allUserPRNums.map(async (n) => {
+      threadCounts.set(n, await fetchReviewThreads(n));
+    })
+  );
+
+  // Build final model.
+  const stacks = [];
+  let stackIdx = 0;
+  for (const es of enrichedStacks) {
+    stackIdx++;
+    const userOpenPRs = es.userBranches.filter((u) => u.pr && !u.isMerged);
+    const userMergedPRs = es.userBranches.filter((u) => u.isMerged);
+
+    const jiraKeysSet = new Set();
+    for (const u of userOpenPRs) {
+      const t = parseTitle(u.pr.title);
+      if (t.jira_tag && t.jira_tag !== "NO-JIRA") jiraKeysSet.add(t.jira_tag);
+    }
+    const jiraKeys = [...jiraKeysSet].sort();
+
+    // Find worktree associated with this stack: any user branch matches a worktree branch.
+    let worktree = null;
+    for (const u of es.userBranches) {
+      if (worktreeBranchToWT.has(u.branch)) {
+        worktree = worktreeBranchToWT.get(u.branch);
+        break;
+      }
+    }
+
+    // Build PRs (top → bottom).
+    const userPRsRender = userOpenPRs.map((u, i) => {
+      const t = parseTitle(u.pr.title);
+      const isBottom = i === userOpenPRs.length - 1;
+      const status = deriveStatus(
+        u.pr.reviewDecision || "REVIEW_REQUIRED",
+        isBottom,
+        true
+      );
+      const tc = threadCounts.get(u.pr.number) || { human: 0, bot: 0 };
+      return {
+        num: u.pr.number,
+        url: `https://app.graphite.com/github/pr/revefi/rcode/${u.pr.number}`,
+        title: t.title,
+        jira_tag: t.jira_tag,
+        part_tag: t.part_tag,
+        is_draft: !!u.pr.isDraft,
+        decision: u.pr.reviewDecision || "REVIEW_REQUIRED",
+        status_label: status.label,
+        status_class: status.cls,
+        human_comments: tc.human,
+        bot_comments: tc.bot,
+        updated_label: relTime(u.pr.updatedAt),
+        needs_restack: u.flags && u.flags.includes("needs restack"),
+      };
+    });
+
+    // Counts.
+    const counts = {
+      created: userOpenPRs.length,
+      merged: userMergedPRs.length,
+      approved: userPRsRender.filter((p) => p.decision === "APPROVED").length,
+      pending: userPRsRender.filter(
+        (p) => p.decision !== "APPROVED" && p.decision !== "CHANGES_REQUESTED"
+      ).length,
+      changes_requested: userPRsRender.filter(
+        (p) => p.decision === "CHANGES_REQUESTED"
+      ).length,
+    };
+
+    // Upstream PRs render.
+    const upstreamPRsRender = es.upstreamBranches
+      .map((ub) => upstreamMetaMap.get(ub.branch))
+      .filter(Boolean)
+      .map((meta) => {
+        const t = parseTitle(meta.title);
+        const status = deriveStatus(
+          meta.reviewDecision || "REVIEW_REQUIRED",
+          false,
+          false
+        );
+        return {
+          num: meta.number,
+          url: meta.url,
+          title: t.title,
+          jira_tag: t.jira_tag,
+          part_tag: t.part_tag,
+          author: meta.author?.login || "unknown",
+          decision: meta.reviewDecision || "REVIEW_REQUIRED",
+          status_label: status.label,
+          status_class: status.cls,
+          updated_label: relTime(meta.updatedAt),
+        };
+      });
+
+    // Upstream summary stats.
+    let upstream = null;
+    if (upstreamPRsRender.length > 0) {
+      const approved = upstreamPRsRender.filter(
+        (p) => p.decision === "APPROVED"
+      ).length;
+      const cr = upstreamPRsRender.filter(
+        (p) => p.decision === "CHANGES_REQUESTED"
+      ).length;
+      const rr = upstreamPRsRender.length - approved - cr;
+      upstream = {
+        n: upstreamPRsRender.length,
+        author: upstreamPRsRender[0]?.author || "unknown",
+        approved,
+        changes_requested: cr,
+        review_required: rr,
+      };
+    }
+
+    // Stack category.
+    const anyHumanComments = userPRsRender.some((p) => p.human_comments > 0);
+    const allApproved = userPRsRender.every((p) => p.decision === "APPROVED");
+    let category, categoryLabel;
+    if (anyHumanComments) {
+      category = "human_review";
+      categoryLabel = "Address review comments";
+    } else if (
+      allApproved &&
+      (!upstream ||
+        upstream.changes_requested + upstream.review_required === 0) &&
+      !upstream
+    ) {
+      category = "ready";
+      categoryLabel = "Ready to merge";
+    } else if (
+      allApproved &&
+      upstream &&
+      upstream.changes_requested + upstream.review_required === 0
+    ) {
+      category = "blocked_upstream";
+      categoryLabel = "Blocked upstream";
+    } else if (allApproved && upstream) {
+      category = "blocked_upstream";
+      categoryLabel = "Blocked upstream";
+    } else {
+      category = "awaiting_review";
+      categoryLabel = "Awaiting review";
+    }
+
+    const needsRestack = userPRsRender.some((p) => p.needs_restack);
+
+    // Stack name: bottom PR title (closest-to-trunk usually has the most descriptive name).
+    const bottomPR = userOpenPRs[userOpenPRs.length - 1];
+    const baseTitle = bottomPR
+      ? parseTitle(bottomPR.pr.title).title
+      : es.userBranches[0].branch;
+    const stackName =
+      baseTitle.replace(/\s*\|\s*/g, " — ").slice(0, 100) ||
+      es.userBranches[0].branch;
+
+    const stackKey =
+      jiraKeys.length > 0
+        ? jiraKeys.join("+")
+        : `NO-JIRA-${es.userBranches[es.userBranches.length - 1].branch}`;
+
+    // Resume session — only use highly-specific keywords to avoid cross-stack false positives.
+    // PR numbers and full branch names are unique enough; short fragments cause leakage.
+    const keywords = [
+      ...userOpenPRs.map((u) => String(u.pr.number)),
+      ...userMergedPRs.map((u) => String(u.pr.n || u.pr.number)),
+      ...es.userBranches.map((u) => u.branch),
+      ...jiraKeys,
+      worktree?.name,
+    ];
+    const resume = await scoreSessionsForStack(keywords, worktree?.name);
+
+    stacks.push({
+      stack_key: stackKey,
+      jira_keys: jiraKeys,
+      name: stackName,
+      category,
+      category_label: categoryLabel,
+      needs_restack: needsRestack,
+      top_pr: userPRsRender[0]
+        ? { num: userPRsRender[0].num, url: userPRsRender[0].url }
+        : null,
+      counts,
+      upstream,
+      worktree: worktree
+        ? { name: worktree.name, path: worktree.path, branch: worktree.branch }
+        : null,
+      resume,
+      prs: userPRsRender,
+      upstream_prs: upstreamPRsRender,
+    });
+  }
+
+  // Improve stack names via Claude (cached on disk by PR-set hash so it only regens
+  // when a stack's PRs actually change). On any failure we keep the fallback name.
+  await enhanceStackNamesWithClaude(stacks);
+
+  // Order stacks by category priority.
+  const categoryOrder = {
+    human_review: 0,
+    ready: 1,
+    blocked_upstream: 2,
+    awaiting_review: 3,
+    other: 4,
+  };
+  stacks.sort(
+    (a, b) =>
+      (categoryOrder[a.category] ?? 9) - (categoryOrder[b.category] ?? 9)
+  );
+
+  // Stale worktrees.
+  const activeBranches = new Set(openPRs.map((p) => p.headRefName));
+  const staleWorktrees = [];
+  for (const w of worktrees) {
+    if (activeBranches.has(w.branch)) continue;
+    const anyPR = await fetchAnyPR(w.branch);
+    if (anyPR) {
+      if (anyPR.state === "MERGED") {
+        staleWorktrees.push({
+          ...w,
+          reason: `PR #${anyPR.number} merged`,
+          pr_num: anyPR.number,
+          pr_url: anyPR.url,
+        });
+      } else if (anyPR.state === "CLOSED") {
+        staleWorktrees.push({
+          ...w,
+          reason: `PR #${anyPR.number} closed without merge`,
+          pr_num: anyPR.number,
+          pr_url: anyPR.url,
+        });
+      }
+    } else {
+      try {
+        const { stdout } = await execP(
+          `git -C '${w.path}' log main..HEAD --oneline | head -1`
+        );
+        if (!stdout.trim()) {
+          staleWorktrees.push({
+            ...w,
+            reason: "Branch fully merged into main (no unique commits)",
+            pr_num: null,
+            pr_url: null,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  // Enrich stacks with Jira chip data (key + summary).
+  const allJiraKeys = [...new Set(stacks.flatMap((s) => s.jira_keys))];
+  const ticketsByKey = new Map();
+  if (allJiraKeys.length > 0) {
+    const map = await fetchJiraTickets(allJiraKeys);
+    for (const [k, v] of Object.entries(map)) if (v) ticketsByKey.set(k, v);
+  }
+  for (const s of stacks) {
+    s.jira_chips = s.jira_keys.map((k) => {
+      const t = ticketsByKey.get(k);
+      return {
+        key: k,
+        summary: t?.summary || null,
+        url: `https://revefi.atlassian.net/browse/${k}`,
+      };
+    });
+  }
+
+  // Untouched Jira: tickets assigned to me, not associated with any active stack.
+  const openJiraTickets = await fetchOpenJiraTickets();
+  const inStackKeys = new Set(allJiraKeys);
+  const untouchedJira = openJiraTickets
+    .filter((t) => !inStackKeys.has(t.key))
+    .map((t, idx) => ({
+      rank: idx + 1,
+      key: t.key,
+      url: `https://revefi.atlassian.net/browse/${t.key}`,
+      type: t.type,
+      summary: t.summary,
+      priority: t.priority,
+      updated: t.updated,
+      updated_label: relTime(t.updated),
+      note: deriveJiraNote(t),
+      sprint: t.sprint || null,
+    }));
+
+  // Totals.
+  const allUserPRs = stacks.flatMap((s) => s.prs);
+  const totals = {
+    stacks: stacks.length,
+    open_prs: allUserPRs.length,
+    approved: allUserPRs.filter((p) => p.decision === "APPROVED").length,
+    pending: allUserPRs.filter(
+      (p) => p.decision !== "APPROVED" && p.decision !== "CHANGES_REQUESTED"
+    ).length,
+    changes_requested: allUserPRs.filter(
+      (p) => p.decision === "CHANGES_REQUESTED"
+    ).length,
+  };
+
+  return {
+    meta: {
+      generated_at: new Date().toISOString(),
+      date: new Date().toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+      totals,
+      jira_configured: jiraConfigured(),
+    },
+    stacks,
+    untouched_jira: untouchedJira,
+    stale_worktrees: staleWorktrees,
+  };
+}
+
+function deriveJiraNote(t) {
+  if (t.type === "Bug") return "Customer-visible";
+  return "—";
+}
+
+// ---------- stack-name generation (Claude, cached by PR-set hash) ----------
+function stackPrHash(stack) {
+  return [...stack.prs.map((p) => p.num)].sort((a, b) => a - b).join(",");
+}
+function stackNameCacheKey(stack) {
+  return `${stack.stack_key}:${stackPrHash(stack)}`;
+}
+
+async function enhanceStackNamesWithClaude(stacks) {
+  // Load disk cache once (already TTL-checked by loadDiskCache).
+  const cached = loadDiskCache(STACK_NAMES_CACHE_FILE) || {};
+
+  // Apply cached names + collect stacks needing fresh names.
+  const needs = [];
+  for (const s of stacks) {
+    const ck = stackNameCacheKey(s);
+    if (cached[ck]) {
+      s.name = cached[ck];
+    } else {
+      needs.push({ ck, stack: s });
+    }
+  }
+  if (needs.length === 0) return;
+
+  // Build a single Claude prompt for all stacks at once.
+  const payload = needs.reduce((acc, { ck, stack }) => {
+    acc[ck] = stack.prs.map((p) => {
+      const tag = p.jira_tag ? `[${p.jira_tag}]` : "";
+      const part = p.part_tag || "";
+      return `${tag}${part} ${p.title}`.trim();
+    });
+    return acc;
+  }, {});
+
+  const prompt =
+    `Generate a short, descriptive stack name (4-7 words, Title Case, no quotes, no trailing punctuation) ` +
+    `for each PR stack below. The name should capture the WHAT of the stack, not the individual parts. ` +
+    `Avoid generic words like "stack" or "PRs". Use "&" or "+" to combine when a stack covers multiple themes.\n\n` +
+    `Output ONLY a JSON object mapping the original key to the generated name. No preamble, no fences.\n\n` +
+    `Stacks (key → list of PR titles, top to bottom):\n${JSON.stringify(
+      payload,
+      null,
+      2
+    )}`;
+
+  let parsed;
+  try {
+    const out = await callClaude(prompt, { timeoutMs: 60_000 });
+    parsed = parseJsonLoose(out);
+  } catch (err) {
+    console.warn("[stack-names] callClaude failed:", err.message);
+    return;
+  }
+  if (!parsed || typeof parsed !== "object") return;
+
+  for (const { ck, stack } of needs) {
+    const name = parsed[ck];
+    if (typeof name === "string" && name.trim()) {
+      stack.name = name.trim();
+      cached[ck] = stack.name;
+    }
+  }
+  saveDiskCache(STACK_NAMES_CACHE_FILE, cached, STACK_NAMES_TTL_MS);
+}
+
+// ---------- caching ----------
+function clearClaudeBackedCaches() {
+  // Stack names are the only Claude-backed disk cache now (Jira goes through direct REST).
+  try {
+    fs.unlinkSync(STACK_NAMES_CACHE_FILE);
+  } catch {
+    /* file may not exist */
+  }
+}
+
+async function getData(forceRefresh = false, opts = {}) {
+  if (opts.intelligent) clearClaudeBackedCaches();
+
+  const now = Date.now();
+  if (
+    !forceRefresh &&
+    !opts.intelligent &&
+    cache.data &&
+    now - cache.ts < CACHE_TTL_MS
+  ) {
+    return cache.data;
+  }
+  if (cache.building) return cache.building;
+  cache.building = (async () => {
+    try {
+      const data = await buildModel();
+      cache = { ts: Date.now(), data, building: null };
+      return data;
+    } catch (err) {
+      cache.building = null;
+      throw err;
+    }
+  })();
+  return cache.building;
+}
+
+// ---------- recommendations (Claude-backed) ----------
+let recsCache = loadRecsFromDisk();
+let recsBuilding = null;
+
+function loadRecsFromDisk() {
+  try {
+    return JSON.parse(fs.readFileSync(RECS_CACHE_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function saveRecsToDisk(recs) {
+  try {
+    fs.writeFileSync(RECS_CACHE_FILE, JSON.stringify(recs, null, 2));
+  } catch (err) {
+    console.warn("[recs] save failed:", err.message);
+  }
+}
+
+function buildRecsPayload(model) {
+  // Trim to the smallest payload that still gives Claude enough to make sharp recommendations.
+  return {
+    stacks: model.stacks.map((s) => ({
+      name: s.name,
+      category: s.category,
+      jira: s.jira_keys,
+      counts: s.counts,
+      needs_restack: s.needs_restack,
+      top_pr: s.top_pr?.num || null,
+      bottom_pr: s.prs[s.prs.length - 1]?.num || null,
+      worktree: s.worktree?.name || null,
+      upstream: s.upstream
+        ? {
+            n: s.upstream.n,
+            author: s.upstream.author,
+            approved: s.upstream.approved,
+            changes_requested: s.upstream.changes_requested,
+            review_required: s.upstream.review_required,
+          }
+        : null,
+      prs: s.prs.map((p) => ({
+        n: p.num,
+        d: p.decision,
+        h: p.human_comments,
+        b: p.bot_comments,
+      })),
+    })),
+    untouched_jira: (model.untouched_jira || []).slice(0, 8).map((j) => ({
+      key: j.key,
+      type: j.type,
+      summary: j.summary,
+      days_old: Math.floor(
+        (Date.now() - new Date(j.updated).getTime()) / 86400000
+      ),
+    })),
+    stale_worktrees: model.stale_worktrees.map((w) => ({
+      name: w.name,
+      reason: w.reason,
+    })),
+  };
+}
+
+async function generateRecommendations(model) {
+  const payload = buildRecsPayload(model);
+  const prompt =
+    `You are reviewing my live PR/stack dashboard and producing actionable recommendations.\n\n` +
+    `Output 3-6 single-sentence recommendations as raw HTML <li> elements (no <ol> wrapper, no markdown, no preamble — just <li>...</li> joined by newlines). Rules:\n` +
+    `- Start with <strong>action phrase</strong>.\n` +
+    `- Reference PR numbers as <a href="https://app.graphite.com/github/pr/revefi/rcode/NUM" target="_blank" rel="noopener">#NUM</a>.\n` +
+    `- Reference Jira tickets as <a href="https://revefi.atlassian.net/browse/KEY" target="_blank" rel="noopener">KEY</a>.\n` +
+    `- Wrap commands like \`gt restack\` in <code>...</code>.\n` +
+    `- Order most actionable first: human review comments, ready-to-merge, blocked upstream, restacks needed, fresh review requests, stale worktrees, new work pick.\n` +
+    `- Skip categories that don't apply.\n\n` +
+    `Field key: counts.{created,merged,approved,pending,changes_requested}; per-PR d=reviewDecision (APPROVED|REVIEW_REQUIRED|CHANGES_REQUESTED|empty), h=human review comments (open), b=bot review comments (open).\n\n` +
+    `Data: ${JSON.stringify(payload)}`;
+
+  return callClaude(prompt, { timeoutMs: 90_000 });
+}
+
+async function getRecommendations(forceRefresh = false) {
+  if (!forceRefresh && recsCache) return recsCache;
+  if (recsBuilding) return recsBuilding;
+  recsBuilding = (async () => {
+    try {
+      const model = await getData(false);
+      const html = await generateRecommendations(model);
+      const recs = {
+        ts: new Date().toISOString(),
+        html,
+      };
+      recsCache = recs;
+      saveRecsToDisk(recs);
+      return recs;
+    } finally {
+      recsBuilding = null;
+    }
+  })();
+  return recsBuilding;
+}
+
+// ---------- HTTP server ----------
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".png": "image/png",
+};
+
+function serveStatic(req, res) {
+  let urlPath = req.url.split("?")[0];
+  if (urlPath === "/") urlPath = "/index.html";
+  const filePath = path.join(STATIC_DIR, urlPath);
+  if (!filePath.startsWith(STATIC_DIR)) {
+    res.writeHead(403);
+    res.end("forbidden");
+    return;
+  }
+  fs.readFile(filePath, (err, buf) => {
+    if (err) {
+      res.writeHead(404);
+      res.end("not found");
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type":
+        MIME[path.extname(filePath)] || "application/octet-stream",
+    });
+    res.end(buf);
+  });
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  if (url.pathname === "/api/data") {
+    try {
+      const force = url.searchParams.get("refresh") === "1";
+      const intelligent = url.searchParams.get("intelligent") === "1";
+      const data = await getData(force, { intelligent });
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(data));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message, stack: err.stack }));
+    }
+    return;
+  }
+  if (url.pathname === "/api/recommendations") {
+    try {
+      const force = url.searchParams.get("refresh") === "1";
+      const recs = await getRecommendations(force);
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(recs || { ts: null, html: "" }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+  if (url.pathname === "/api/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        cached: !!cache.data,
+        age_ms: Date.now() - cache.ts,
+        recs_cached: !!recsCache,
+        recs_ts: recsCache?.ts || null,
+        jira_configured: jiraConfigured(),
+      })
+    );
+    return;
+  }
+  serveStatic(req, res);
+});
+
+server.listen(PORT, "127.0.0.1", () => {
+  console.log(`Live dashboard listening on http://localhost:${PORT}`);
+  console.log(`Open in browser, or run:  open http://localhost:${PORT}`);
+  console.log(
+    `Jira: ${
+      jiraConfigured()
+        ? "configured"
+        : "NOT configured (set ATLASSIAN_EMAIL + ATLASSIAN_API_TOKEN in .env)"
+    }`
+  );
+});

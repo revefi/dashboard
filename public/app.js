@@ -1,0 +1,878 @@
+// Live dashboard — vanilla JS SPA. Polls /api/data + manages /api/recommendations.
+
+const COMPLETED_KEY = "dashboard.completed";
+const REMARKS_KEY_PREFIX = "dashboard.remarks.stack.";
+const JIRA_REMARKS_PREFIX = "dashboard.remarks.jira.";
+const WORKING_KEY_PREFIX = "dashboard.working.";
+const AUTO_REFRESH_MS = 600_000; // 10 minutes
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+function esc(s) {
+  if (s == null) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function getCompletedSet() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COMPLETED_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+function setCompletedSet(set) {
+  localStorage.setItem(COMPLETED_KEY, JSON.stringify([...set]));
+}
+function toggleCompleted(stackKey) {
+  const s = getCompletedSet();
+  if (s.has(stackKey)) s.delete(stackKey);
+  else s.add(stackKey);
+  setCompletedSet(s);
+}
+
+// ---------- rendering ----------
+function renderSummary(meta) {
+  const t = meta.totals;
+  const parts = [
+    `<div class="stat"><div class="v">${t.stacks}</div><div class="l">Active stacks</div></div>`,
+    `<div class="stat"><div class="v">${t.open_prs}</div><div class="l">Open PRs</div></div>`,
+    `<div class="stat ok"><div class="v">${t.approved}</div><div class="l">Approved</div></div>`,
+    `<div class="stat pending"><div class="v">${t.pending}</div><div class="l">Pending review</div></div>`,
+  ];
+  if (t.changes_requested > 0) {
+    parts.push(
+      `<div class="stat danger"><div class="v">${t.changes_requested}</div><div class="l">Changes requested</div></div>`
+    );
+  }
+  $("#summary").innerHTML = parts.join("");
+  $("#meta-date").textContent = meta.date;
+}
+
+function truncate(s, n) {
+  if (!s || s.length <= n) return s || "";
+  return s.slice(0, n - 1) + "…";
+}
+
+function renderJiraChips(stack) {
+  if (!stack.jira_chips || stack.jira_chips.length === 0) return "";
+  return `<div class="chips">${stack.jira_chips
+    .map((c) => {
+      const label = c.summary ? `${c.key} — ${truncate(c.summary, 60)}` : c.key;
+      const title = c.summary ? `${c.key} — ${c.summary}` : c.key;
+      return `<a class="chip" href="${esc(
+        c.url
+      )}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${esc(
+        title
+      )}">${esc(label)}</a>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderPrRow(pr, opts = {}) {
+  const cls = pr.status_class || "primary";
+  const jira = pr.jira_tag
+    ? `<span class="stack-jira">[${esc(pr.jira_tag)}]${
+        pr.part_tag ? esc(pr.part_tag) : ""
+      }</span>`
+    : "";
+  const author = opts.is_upstream
+    ? `<span class="stack-author">· @${esc(pr.author)}</span>`
+    : "";
+  const comments =
+    pr.human_comments || pr.bot_comments
+      ? `<span class="stack-comments" title="${pr.human_comments || 0} human, ${
+          pr.bot_comments || 0
+        } bot (open)">💬 <span class="h">${
+          pr.human_comments || 0
+        }h</span>/<span class="b">${pr.bot_comments || 0}b</span></span>`
+      : "";
+  const draft = pr.is_draft ? " 📝" : "";
+  return `
+    <div class="stack-row ${cls}">
+      <a class="stack-link" href="${esc(
+        pr.url
+      )}" target="_blank" rel="noopener">
+        <span class="stack-num">#${pr.num}</span>
+        ${jira}
+        <span class="stack-pr-title">${esc(pr.title)}${draft}</span>
+        ${author}
+      </a>
+      ${comments}
+      <span class="stack-status ${cls}">${esc(pr.status_label)}</span>
+      <span class="stack-time">${esc(pr.updated_label || "")}</span>
+    </div>`;
+}
+
+function renderUpstreamBanner(stack) {
+  if (!stack.upstream) return "";
+  const u = stack.upstream;
+  const blocking = u.changes_requested + u.review_required;
+  if (blocking > 0) {
+    return `<div class="upstream-banner">🚧 Blocked by <b>${blocking}</b> upstream PR(s) by @${esc(
+      u.author
+    )} not yet approved.</div>`;
+  }
+  return `<div class="upstream-banner ok">✅ All ${u.n} upstream PRs by @${esc(
+    u.author
+  )} are approved — awaiting their merge before yours can land.</div>`;
+}
+
+function renderUpstreamPRs(stack) {
+  if (!stack.upstream_prs || stack.upstream_prs.length === 0) return "";
+  const u = stack.upstream;
+  const summary =
+    `Show ${stack.upstream_prs.length} dependent PR${
+      stack.upstream_prs.length === 1 ? "" : "s"
+    } by @${esc(u.author)} ` +
+    `(${u.approved} approved${
+      u.changes_requested > 0
+        ? ` · ${u.changes_requested} changes-requested`
+        : ""
+    }${u.review_required > 0 ? ` · ${u.review_required} pending` : ""})`;
+  return `
+    <details class="upstream-pr-list">
+      <summary>${summary}</summary>
+      ${stack.upstream_prs
+        .map((p) => renderPrRow(p, { is_upstream: true }))
+        .join("")}
+    </details>`;
+}
+
+function renderResumeBtn(resume) {
+  if (!resume) return "";
+  const cmd = resume.in_worktree
+    ? `(cd .claude/worktrees/${resume.worktree_name} && cldr ${resume.sid})`
+    : `cldr ${resume.sid}`;
+  return `<span class="copy-cmd" data-cmd="${esc(cmd)}" data-copy>💻 ${esc(
+    cmd
+  )} <span class="cp">copy</span></span>`;
+}
+
+function renderStackCard(stack, isMerged, idx) {
+  const completed = isMerged;
+  const counts = stack.counts;
+  const totalHuman = stack.prs.reduce((n, p) => n + (p.human_comments || 0), 0);
+  const totalBot = stack.prs.reduce((n, p) => n + (p.bot_comments || 0), 0);
+  const totalComments = totalHuman + totalBot;
+  const commentChip = totalComments > 0
+    ? `<span class="count-chip ${totalHuman > 0 ? "danger" : ""}" title="${totalHuman} human, ${totalBot} bot — open review threads across all PRs">💬 ${totalComments} ${totalComments === 1 ? "comment" : "comments"}${totalHuman > 0 ? ` (${totalHuman}h/${totalBot}b)` : ""}</span>`
+    : "";
+  const countChips = [
+    `<span class="count-chip">${counts.created} created</span>`,
+    counts.merged > 0
+      ? `<span class="count-chip ok">${counts.merged} merged</span>`
+      : "",
+    counts.approved > 0
+      ? `<span class="count-chip ok">${counts.approved} approved</span>`
+      : "",
+    counts.pending > 0
+      ? `<span class="count-chip warn">${counts.pending} pending</span>`
+      : "",
+    counts.changes_requested > 0
+      ? `<span class="count-chip danger">${counts.changes_requested} changes-requested</span>`
+      : "",
+    commentChip,
+  ]
+    .filter(Boolean)
+    .join("");
+
+  const pillCategory = completed
+    ? '<span class="pill merged">Merged</span>'
+    : `<span class="pill ${stack.category}">${esc(
+        stack.category_label
+      )}</span>`;
+  const pillRestack = stack.needs_restack
+    ? '<span class="pill warn">⚠ Needs restack</span>'
+    : "";
+
+  const wtCmd = stack.worktree
+    ? `<span class="copy-cmd" data-cmd="git worktree remove ${esc(
+        stack.worktree.path
+      )}" data-copy>🗑 git worktree remove ${esc(
+        stack.worktree.path
+      )} <span class="cp">copy</span></span>`
+    : "";
+
+  const completeBtn = completed
+    ? `<button class="btn restore" data-action="restore" data-key="${esc(
+        stack.stack_key
+      )}">↩ Restore to active</button>`
+    : `<button class="btn complete" data-action="complete" data-key="${esc(
+        stack.stack_key
+      )}">✓ Mark complete</button>`;
+
+  const anchorId = `stack-${completed ? "merged" : "active"}-${esc(
+    stack.stack_key
+  )}`;
+  return `
+    <details id="${anchorId}" class="card stack-card ${
+    completed ? "merged-card" : ""
+  }" ${completed ? "" : "open"} data-stack-key="${esc(stack.stack_key)}">
+      <summary>
+        <div class="stack-head">
+          <div>
+            <div class="stack-name"><span class="stack-num-h">#${idx}</span>${esc(
+    stack.name
+  )}</div>
+            <div class="meta-row" style="margin-top:0">
+              ${
+                stack.top_pr
+                  ? `<span><b>Top:</b> <a href="${esc(
+                      stack.top_pr.url
+                    )}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${
+                      stack.top_pr.num
+                    }</a></span>`
+                  : ""
+              }
+              ${
+                stack.worktree
+                  ? `<span><b>Worktree:</b> <code>${esc(
+                      stack.worktree.name
+                    )}</code></span>`
+                  : ""
+              }
+            </div>
+            ${renderJiraChips(stack)}
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+            ${pillCategory}
+            ${pillRestack}
+          </div>
+        </div>
+        <div class="counts" style="margin-top:8px">${countChips}</div>
+      </summary>
+      <div class="stack-body">
+        ${completed ? "" : renderUpstreamBanner(stack)}
+        ${
+          stack.needs_restack && !completed
+            ? '<div class="restack-warn">⚠️ Run <code>gt restack</code> before merging.</div>'
+            : ""
+        }
+        <div class="actions">
+          ${completeBtn}
+          ${stack.resume && !completed ? renderResumeBtn(stack.resume) : ""}
+          ${completed && stack.worktree ? wtCmd : ""}
+        </div>
+        ${
+          !completed
+            ? `
+        <div class="stack-remarks-wrap">
+          <div class="label">📝 Remarks</div>
+          <div class="stack-remarks" contenteditable="true" spellcheck="false" data-remarks-key="${esc(
+            stack.stack_key
+          )}"></div>
+        </div>`
+            : ""
+        }
+        <div class="stack-list">
+          ${stack.prs
+            .map((p, i) =>
+              renderPrRow(p, { is_bottom: i === stack.prs.length - 1 })
+            )
+            .join("")}
+          ${!completed ? renderUpstreamPRs(stack) : ""}
+          <div class="stack-row trunk"><span class="stack-link" style="cursor:default">main (trunk)</span></div>
+        </div>
+      </div>
+    </details>`;
+}
+
+function renderStaleWorktrees(list) {
+  const sec = $("#stale-section");
+  if (!list || list.length === 0) {
+    sec.style.display = "none";
+    return;
+  }
+  sec.style.display = "";
+  $("#stale-list").innerHTML = list
+    .map(
+      (wt) => `
+    <div class="stale-worktree-row">
+      <span class="stale-worktree-name">${esc(wt.name)}</span>
+      <span class="stale-worktree-reason">
+        ${esc(wt.reason)}${
+        wt.pr_url
+          ? ` (<a href="${esc(wt.pr_url)}" target="_blank" rel="noopener">PR #${
+              wt.pr_num
+            }</a>)`
+          : ""
+      }
+      </span>
+      <span class="copy-cmd" data-cmd="git worktree remove ${esc(
+        wt.path
+      )}" data-copy>git worktree remove ${esc(
+        wt.path
+      )} <span class="cp">copy</span></span>
+    </div>
+  `
+    )
+    .join("");
+}
+
+const SPRINT_FILTER_KEY = "dashboard.sprint_filter";
+let cachedUntouchedList = [];
+
+function getSprintFilter() {
+  return localStorage.getItem(SPRINT_FILTER_KEY) || "current";
+}
+function setSprintFilter(v) {
+  localStorage.setItem(SPRINT_FILTER_KEY, v);
+}
+
+function uniqueSprintsFromTickets(list) {
+  const map = new Map();
+  for (const t of list) {
+    if (!t.sprint) continue;
+    if (!map.has(t.sprint.id)) map.set(t.sprint.id, t.sprint);
+  }
+  // Sort: active first, then by start date desc.
+  return [...map.values()].sort((a, b) => {
+    if (a.state === "active" && b.state !== "active") return -1;
+    if (a.state !== "active" && b.state === "active") return 1;
+    return (b.start_date || "").localeCompare(a.start_date || "");
+  });
+}
+
+function renderSprintFilter(sprints) {
+  const wrap = $("#sprint-filter-wrap");
+  if (!wrap) return;
+  if (!sprints || sprints.length === 0) {
+    wrap.innerHTML = "";
+    return;
+  }
+  const current = getSprintFilter();
+  const primaryId = pickPrimarySprintId(cachedUntouchedList);
+  const primary = sprints.find((s) => s.id === primaryId);
+  const currentLabel = primary
+    ? `Current sprint (${primary.name})`
+    : "Current sprint";
+  const opts = [
+    `<option value="current">${esc(currentLabel)}</option>`,
+    `<option value="all">All sprints</option>`,
+    `<option value="none">No sprint</option>`,
+    ...sprints.map(
+      (s) =>
+        `<option value="${esc(String(s.id))}">${esc(s.name)} (${esc(
+          s.state || ""
+        )})</option>`
+    ),
+  ].join("");
+  wrap.innerHTML = `<select class="sprint-select" id="sprint-select">${opts}</select>`;
+  const sel = $("#sprint-select");
+  sel.value = current;
+  sel.addEventListener("change", () => {
+    setSprintFilter(sel.value);
+    renderUntouchedRows();
+    rebuildSidebar(currentData);
+  });
+}
+
+function pickPrimarySprintId(list) {
+  // "Current sprint" definition: prefer the sprint with the most tickets in 'active' state;
+  // if no active tickets, fall back to the most-tickets 'future' sprint (planning the next one);
+  // else the most recent 'closed' sprint.
+  const counts = new Map(); // id → { state, name, count }
+  for (const t of list) {
+    if (!t.sprint) continue;
+    const key = t.sprint.id;
+    const cur = counts.get(key);
+    if (cur) cur.count++;
+    else counts.set(key, { id: key, state: t.sprint.state, count: 1 });
+  }
+  const ranked = [...counts.values()].sort((a, b) => {
+    const order = { active: 0, future: 1, closed: 2 };
+    const sa = order[a.state] ?? 3;
+    const sb = order[b.state] ?? 3;
+    if (sa !== sb) return sa - sb;
+    return b.count - a.count;
+  });
+  return ranked[0]?.id || null;
+}
+
+function applySprintFilter(list) {
+  const filter = getSprintFilter();
+  if (filter === "all") return list;
+  if (filter === "none") return list.filter((t) => !t.sprint);
+  if (filter === "current") {
+    const primaryId = pickPrimarySprintId(list);
+    if (primaryId == null) return list;
+    return list.filter((t) => t.sprint && t.sprint.id === primaryId);
+  }
+  return list.filter((t) => t.sprint && String(t.sprint.id) === filter);
+}
+
+function renderSprintCell(sprint) {
+  if (!sprint) return `<td class="sprint-cell">—</td>`;
+  const cls =
+    sprint.state === "active"
+      ? "sprint-active"
+      : sprint.state === "closed"
+      ? "sprint-closed"
+      : "";
+  return `<td class="sprint-cell"><span class="${cls}" title="${esc(
+    sprint.state || ""
+  )}">${esc(sprint.name)}</span></td>`;
+}
+
+function renderUntouchedRows() {
+  const filtered = applySprintFilter(cachedUntouchedList);
+  const tbody = $("#untouched-rows");
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="padding:18px;color:var(--muted);font-style:italic;text-align:center">
+      No tickets in this sprint. Switch the dropdown to <strong>All sprints</strong>.
+    </td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered
+    .map(
+      (t, idx) => `
+    <tr class="jira-row" data-key="${esc(t.key)}">
+      <td style="color:var(--muted);font-weight:600">${idx + 1}</td>
+      <td><a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(
+        t.key
+      )}</a></td>
+      <td><span class="type-badge ${esc((t.type || "task").toLowerCase())}">${
+        t.type === "Bug" ? "🐛 Bug" : "📋 Task"
+      }</span></td>
+      <td><a class="jira-title" href="${esc(
+        t.url
+      )}" target="_blank" rel="noopener">${esc(t.summary)}</a></td>
+      ${renderSprintCell(t.sprint)}
+      <td>${esc(t.updated_label || "")}</td>
+      <td><label class="toggle"><input type="checkbox" class="working-cb"><span class="slider"></span></label></td>
+      <td><div class="remarks" contenteditable="true" spellcheck="false"></div></td>
+    </tr>`
+    )
+    .join("");
+  wireDelegates();
+}
+
+function renderUntouchedJira(list, jiraConfigured) {
+  const sec = $("#untouched-section");
+  cachedUntouchedList = list || [];
+  if (!list || list.length === 0) {
+    if (jiraConfigured === false) {
+      sec.style.display = "";
+      $("#sprint-filter-wrap").innerHTML = "";
+      $(
+        "#untouched-rows"
+      ).innerHTML = `<tr><td colspan="8" style="padding:24px;color:var(--muted);font-style:italic;text-align:center">
+        Jira not configured. Add <code>ATLASSIAN_EMAIL</code> and <code>ATLASSIAN_API_TOKEN</code> to <code>.claude/dashboard/.env</code> and restart the server.
+      </td></tr>`;
+      return;
+    }
+    sec.style.display = "none";
+    return;
+  }
+  sec.style.display = "";
+  renderSprintFilter(uniqueSprintsFromTickets(list));
+  renderUntouchedRows();
+}
+
+function render(data) {
+  if (!data) return;
+  renderSummary(data.meta);
+  const completed = getCompletedSet();
+
+  const active = data.stacks.filter((s) => !completed.has(s.stack_key));
+  const merged = data.stacks.filter((s) => completed.has(s.stack_key));
+
+  $("#active-stacks").innerHTML =
+    active.length === 0
+      ? '<div class="card" style="text-align:center;color:var(--muted)">No active stacks.</div>'
+      : active.map((s, i) => renderStackCard(s, false, i + 1)).join("");
+
+  if (merged.length > 0) {
+    $("#merged-section").style.display = "";
+    $("#merged-stacks").innerHTML = merged
+      .map((s, i) => renderStackCard(s, true, i + 1))
+      .join("");
+  } else {
+    $("#merged-section").style.display = "none";
+  }
+
+  renderUntouchedJira(data.untouched_jira, data.meta.jira_configured);
+  renderStaleWorktrees(data.stale_worktrees);
+  rebuildSidebar(data);
+  wireDelegates();
+
+  $("#footer-text").textContent = `Last updated ${new Date(
+    data.meta.generated_at
+  ).toLocaleTimeString()}`;
+}
+
+// ---------- sidebar jump nav ----------
+function rebuildSidebar(data) {
+  if (!data) return;
+  const completed = getCompletedSet();
+  const active = data.stacks.filter((s) => !completed.has(s.stack_key));
+  const merged = data.stacks.filter((s) => completed.has(s.stack_key));
+
+  const sections = [];
+  sections.push({
+    id: "active-section",
+    label: "Active stacks",
+    children: active.map((s, i) => ({
+      id: `stack-active-${s.stack_key}`,
+      num: i + 1,
+      label: s.name,
+      cls: "",
+    })),
+  });
+  if (merged.length > 0) {
+    sections.push({
+      id: "merged-section",
+      label: "Merged stacks",
+      children: merged.map((s, i) => ({
+        id: `stack-merged-${s.stack_key}`,
+        num: i + 1,
+        label: s.name,
+        cls: "merged",
+      })),
+    });
+  }
+  if (data.untouched_jira && data.untouched_jira.length > 0) {
+    sections.push({
+      id: "untouched-section",
+      label: "Untouched Jira",
+      children: [],
+    });
+  }
+  if (data.stale_worktrees && data.stale_worktrees.length > 0) {
+    sections.push({
+      id: "stale-section",
+      label: "Stale worktrees",
+      children: [],
+    });
+  }
+  sections.push({ id: "recs-section", label: "Recommendations", children: [] });
+
+  const html = sections
+    .map((sec) => {
+      const childHtml =
+        sec.children.length > 0
+          ? `<div class="nav-stack-list">${sec.children
+              .map(
+                (c) =>
+                  `<button class="nav-stack-item ${c.cls}" data-jump="${esc(
+                    c.id
+                  )}" title="${esc(c.label)}">
+                    <span class="nav-stack-num">#${c.num}</span><span>${esc(
+                    c.label
+                  )}</span>
+                  </button>`
+              )
+              .join("")}</div>`
+          : "";
+      return `<button class="nav-section" data-jump="${esc(sec.id)}">${esc(
+        sec.label
+      )}</button>${childHtml}`;
+    })
+    .join("");
+  $("#jump-nav").innerHTML = html;
+
+  // Wire jump-to behavior.
+  $$("[data-jump]").forEach((el) => {
+    if (el._wired) return;
+    el._wired = true;
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const target = document.getElementById(el.dataset.jump);
+      if (!target) return;
+      // If targeting a closed stack-card, open it before scrolling.
+      if (target.tagName === "DETAILS" && !target.open) target.open = true;
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+}
+
+function wireDelegates() {
+  // Stack-card toggle listeners — keep the "Collapse/Expand all" label in sync
+  // when individual cards open/close. `toggle` doesn't bubble so we attach per-card.
+  $$("details.stack-card").forEach((el) => {
+    if (el._toggleWired) return;
+    el._toggleWired = true;
+    el.addEventListener("toggle", updateCollapseAllLabel);
+  });
+
+  // Stack remarks (contentEditable persisted to localStorage).
+  $$(".stack-remarks").forEach((el) => {
+    const key = el.dataset.remarksKey;
+    const stored = localStorage.getItem(REMARKS_KEY_PREFIX + key);
+    if (stored) el.innerHTML = stored;
+    wireRichText(el, REMARKS_KEY_PREFIX + key);
+  });
+
+  // Jira row remarks + working checkbox.
+  const today = new Date().toISOString().slice(0, 10);
+  $$("tr.jira-row").forEach((row) => {
+    const k = row.dataset.key;
+    const cb = row.querySelector(".working-cb");
+    const wkKey = WORKING_KEY_PREFIX + today + "." + k;
+    cb.checked = localStorage.getItem(wkKey) === "1";
+    if (cb.checked) row.classList.add("working");
+    cb.addEventListener("change", () => {
+      localStorage.setItem(wkKey, cb.checked ? "1" : "0");
+      row.classList.toggle("working", cb.checked);
+    });
+    const rem = row.querySelector(".remarks");
+    const stored = localStorage.getItem(JIRA_REMARKS_PREFIX + k);
+    if (stored) rem.innerHTML = stored;
+    wireRichText(rem, JIRA_REMARKS_PREFIX + k);
+  });
+
+  // Copy buttons.
+  $$("[data-copy]").forEach((el) => {
+    if (el._wired) return;
+    el._wired = true;
+    el.addEventListener("click", () => {
+      const cmd = el.dataset.cmd;
+      navigator.clipboard.writeText(cmd).then(() => {
+        const cp = el.querySelector(".cp");
+        if (!cp) return;
+        const orig = cp.textContent;
+        cp.textContent = "copied!";
+        cp.style.color = "var(--success)";
+        setTimeout(() => {
+          cp.textContent = orig;
+          cp.style.color = "";
+        }, 1200);
+      });
+    });
+  });
+
+  // Mark-complete / Restore buttons.
+  $$('[data-action="complete"], [data-action="restore"]').forEach((el) => {
+    if (el._wired) return;
+    el._wired = true;
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleCompleted(el.dataset.key);
+      render(currentData);
+    });
+  });
+}
+
+function wireRichText(el, persistKey) {
+  el.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData(
+      "text/plain"
+    );
+    document.execCommand("insertText", false, text);
+  });
+  el.addEventListener("blur", () => {
+    autoLinkify(el);
+    localStorage.setItem(persistKey, el.innerHTML);
+  });
+  el.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return;
+      const url = prompt("Link URL:", "https://");
+      if (url) document.execCommand("createLink", false, url);
+    }
+  });
+}
+
+function autoLinkify(el) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const urlRe = /(https?:\/\/[^\s<>]+)/g;
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    if (node.parentElement && node.parentElement.closest("a")) continue;
+    const text = node.nodeValue;
+    if (!urlRe.test(text)) continue;
+    urlRe.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0,
+      m;
+    while ((m = urlRe.exec(text)) !== null) {
+      if (m.index > last)
+        frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const a = document.createElement("a");
+      a.href = m[0];
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = m[0];
+      frag.appendChild(a);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length)
+      frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+// ---------- recommendations ----------
+function renderRecs(recs) {
+  const list = $("#recs-list");
+  const meta = $("#recs-meta");
+  list.classList.remove("loading");
+  if (!recs || !recs.html) {
+    list.innerHTML =
+      '<li class="empty muted">No recommendations yet — click <strong>⟳ Generate</strong> to ask Claude.</li>';
+    meta.textContent = "";
+    return;
+  }
+  list.innerHTML = recs.html;
+  if (recs.ts) {
+    const d = new Date(recs.ts);
+    meta.textContent = `· generated ${d.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    })} ${d.toLocaleDateString([], { month: "short", day: "numeric" })}`;
+  }
+}
+
+async function fetchRecs(force = false) {
+  const btn = $("#recs-refresh-btn");
+  const list = $("#recs-list");
+  btn.classList.add("loading");
+  btn.disabled = true;
+  if (force) {
+    list.classList.add("loading");
+    list.innerHTML =
+      '<li class="empty muted">Generating recommendations… this can take 10–30s.</li>';
+  }
+  try {
+    const url = force
+      ? "/api/recommendations?refresh=1"
+      : "/api/recommendations";
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    const recs = await res.json();
+    renderRecs(recs);
+  } catch (err) {
+    list.classList.remove("loading");
+    list.innerHTML = `<li class="empty" style="color:var(--danger);font-style:normal">Error: ${esc(
+      err.message
+    )}</li>`;
+  } finally {
+    btn.classList.remove("loading");
+    btn.disabled = false;
+  }
+}
+
+// ---------- data fetching ----------
+let currentData = null;
+let lastFetchTs = 0;
+let autoRefreshTimer = null;
+
+async function fetchData(force = false, intelligent = false) {
+  const btn = intelligent ? $("#refresh-intelligent-btn") : $("#refresh-btn");
+  const origLabel = btn.textContent;
+  btn.classList.add("loading");
+  btn.textContent = intelligent ? "🧠 Thinking…" : "↻ Refreshing…";
+  try {
+    const params = new URLSearchParams();
+    if (force) params.set("refresh", "1");
+    if (intelligent) params.set("intelligent", "1");
+    const qs = params.toString();
+    const url = qs ? `/api/data?${qs}` : "/api/data";
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    const data = await res.json();
+    currentData = data;
+    lastFetchTs = Date.now();
+    render(data);
+    $("#error-banner").style.display = "none";
+    updateFreshness();
+  } catch (err) {
+    $("#error-banner").style.display = "";
+    $(
+      "#error-banner"
+    ).textContent = `Error: ${err.message}\n\nTry: refreshing, ensuring \`gh\` and \`gt\` are authenticated, or restarting the server.`;
+  } finally {
+    btn.classList.remove("loading");
+    btn.textContent = origLabel;
+  }
+}
+
+const LAST_INTEL_KEY = "dashboard.lastIntelligentTs";
+
+async function intelligentRefresh() {
+  // Run data refresh (deep — clears Claude-backed disk caches) and recs regen in parallel.
+  const ok = await Promise.all([fetchData(true, true), fetchRecs(true)]);
+  // Mark only if at least the data fetch succeeded (intel-fresh shows worst-case staleness).
+  localStorage.setItem(LAST_INTEL_KEY, String(Date.now()));
+  updateFreshness();
+}
+
+function relAge(ms) {
+  const sec = Math.floor((Date.now() - ms) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function updateFreshness() {
+  if (lastFetchTs) $("#freshness").textContent = `· ${relAge(lastFetchTs)}`;
+  const lastIntel = parseInt(localStorage.getItem(LAST_INTEL_KEY) || "0", 10);
+  if (lastIntel) {
+    $("#intel-freshness").textContent = `· intel ${relAge(lastIntel)}`;
+  } else {
+    $("#intel-freshness").textContent = "· not yet run";
+  }
+}
+
+function setupAutoRefresh() {
+  const cb = $("#auto-refresh-cb");
+  function tick() {
+    if (cb.checked && document.visibilityState === "visible") {
+      // Auto-refresh ONLY pulls /api/data — never regenerates Claude recommendations.
+      fetchData(false);
+    }
+  }
+  cb.addEventListener("change", () => {
+    clearInterval(autoRefreshTimer);
+    if (cb.checked) autoRefreshTimer = setInterval(tick, AUTO_REFRESH_MS);
+  });
+  if (cb.checked) autoRefreshTimer = setInterval(tick, AUTO_REFRESH_MS);
+  setInterval(updateFreshness, 5000);
+}
+
+// ---------- init ----------
+function toggleAllStacks() {
+  const cards = $$("details.stack-card");
+  if (cards.length === 0) return;
+  // If any are open, collapse all. Otherwise, expand all.
+  const anyOpen = [...cards].some((c) => c.open);
+  for (const c of cards) c.open = !anyOpen;
+  updateCollapseAllLabel();
+}
+
+function updateCollapseAllLabel() {
+  const btn = $("#collapse-all-btn");
+  if (!btn) return;
+  const cards = $$("details.stack-card");
+  const anyOpen = [...cards].some((c) => c.open);
+  btn.textContent = anyOpen ? "⊟ Collapse all" : "⊞ Expand all";
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  $("#refresh-btn").addEventListener("click", () => fetchData(true));
+  $("#refresh-intelligent-btn").addEventListener("click", intelligentRefresh);
+  $("#recs-refresh-btn").addEventListener("click", () => fetchRecs(true));
+  $("#collapse-all-btn").addEventListener("click", toggleAllStacks);
+  // Per-card toggle listeners are wired in wireDelegates() (toggle doesn't bubble).
+  setupAutoRefresh();
+  updateFreshness(); // seed intel-freshness label from localStorage
+  fetchData(false);
+  fetchRecs(false); // load cached recs from server (does NOT regenerate)
+});
