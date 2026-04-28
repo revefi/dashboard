@@ -72,6 +72,15 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
   sidebar nav too.
 - **Mark complete** → moves to "Merged stacks" with a `git worktree remove`
   copy button.
+- **One-click restack onto origin/main** — every stack card's `main (trunk)`
+  row shows how many commits its base is behind `origin/main`. If the stack
+  has a worktree and isn't built on someone else's PRs, an `↻ Restack` button
+  appears next to the count. Click → confirm → spinner → the server runs
+  `gt restack` in the worktree, then `gt submit --stack -u` to force-push
+  (with-lease) the rebased branches. On merge conflict the rebase auto-aborts
+  and your branches are unchanged; on push conflict the local restack stays
+  and you retry the push manually. Hidden on stacks with upstream PRs (the
+  count would be misleading there).
 
 ### Untouched Jira
 - Per-row "working today" toggle, markdown remarks, type badge, sprint cell.
@@ -117,6 +126,8 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
   GraphQL query (one round-trip, not one per PR)
 - `gh pr view <n>` — upstream PR metadata
 - `git worktree list --porcelain` — worktrees
+- `git fetch origin main --quiet` + `git rev-list --count` — per-stack
+  "behind origin/main" measurement (read-only; never modifies branches)
 - `~/.claude/projects/.../.jsonl` — session files (parallel grep-scored per stack)
 - `revefi.atlassian.net/rest/api/3/...` — Jira tickets and search via REST
 - `claude -p` — recommendations + stack name generation

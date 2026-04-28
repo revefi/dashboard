@@ -45,6 +45,7 @@ for AI-shaped work (recommendations, stack name generation).
    │ server.js                                          │
    │   /api/data            ← model JSON                │
    │   /api/recommendations ← Claude-generated <li>s    │
+   │   /api/restack (POST)  ← gt restack + gt submit    │
    │   /api/health          ← lightweight status        │
    │   /  /styles.css /app.js /marked.min.js /favicon   │
    └─────────┬────────────────────────────────────────┬─┘
@@ -72,6 +73,8 @@ Sections, in order, separated by `// ----------` banner comments:
 | **gt log parsing** | `parseGtLog()`, `buildStacksFromGtLog()` — text → tree |
 | **worktrees** | `fetchWorktrees()` from `git worktree list --porcelain` |
 | **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchReviewThreadsBulk` (one aliased GraphQL query for all PRs) |
+| **trunk freshness** | `fetchOriginMain` (read-only `git fetch origin main`), `fetchStackBehind(branch)` (per-stack count of commits ahead of the stack's fork point on origin/main) |
+| **restack action** | `restackStack(stackKey)` — guarded `gt restack` + `gt submit --stack -u` in the stack's worktree; `isRebaseInProgress(wt)` (rebase-state probe); `readJson(req)` (POST-body parser) |
 | **Claude CLI** | `callClaude()`, `parseJsonLoose()`, disk-cache helpers |
 | **Jira** | `jiraGet/jiraPost`, `fetchJiraTickets`, `fetchOpenJiraTickets` (direct REST only — Claude/MCP fallback was removed once REST was stable) |
 | **session scoring** | `scoreSessionsForStack()` greps Claude session JSONLs (parallel `Promise.all`) |
@@ -86,6 +89,7 @@ Sections, in order, separated by `// ----------` banner comments:
 
 ```
 1. parallel fetch:  gt log + open PRs + recent merged PRs + worktrees
+                    + `git fetch origin main --quiet` (read-only ref update)
 2. parse gt log → list of leaf-to-trunk chains
 3. for each chain:
      partition into user_segment (your PRs)
@@ -93,7 +97,8 @@ Sections, in order, separated by `// ----------` banner comments:
 4. fetch upstream PR metadata (gh pr view per branch, parallel)
 5. fetch review-thread counts (one bulk GraphQL query, aliased fields per PR)
 6. kick off session scoring for ALL stacks in parallel up front
-7. build PR objects per stack (await each pre-launched scoring promise)
+   + per-stack `fetchStackBehind` (merge-base + rev-list) in parallel
+7. build PR objects per stack (await each pre-launched scoring/behind promise)
 8. enhanceStackNamesWithClaude() — bulk Claude call for any stack
                                     whose PR-set hash isn't cached
 9. detect stale worktrees (parallel Promise.all over worktrees)
@@ -115,6 +120,7 @@ A "stack" object on the wire looks like:
   category: "awaiting_review" | "ready" | "blocked_upstream" | "human_review",
   category_label: "Awaiting review",
   needs_restack: true,
+  behind_origin: 9,                     // commits between leaf's fork-point on main and origin/main
   top_pr: {num, url},
   counts: {created, merged, approved, pending, changes_requested},
   upstream: null | {n, author, approved, changes_requested, review_required},
@@ -130,6 +136,32 @@ Pr = {
   human_comments, bot_comments, updated_label, needs_restack,
 }
 ```
+
+### Restack endpoint (`POST /api/restack`)
+
+Body: `{ stack_key: "..." }`. Server-side `restackStack()` is the only thing
+that mutates user state; it's heavily guarded:
+
+| Guard | Behavior on failure |
+| --- | --- |
+| `stack_key` exists in current model | 400 "unknown stack" |
+| `stack.upstream` is null | 400 "stack sits on upstream PRs — would skip past them" |
+| `stack.worktree.path` is set | 400 "no worktree — run `gt sync` from main checkout" |
+| `behind_origin > 0` | 400 "already up to date" |
+| `git status --porcelain` is empty in the worktree | 400 with the dirty file list |
+| `gt restack` exits 0 AND no leftover `.git/rebase-merge` / `rebase-apply` | else: `git rebase --abort` to restore branches, return error |
+| `gt submit --stack -u --no-edit --no-interactive` exits 0 | else: return partial-success error (local restack stays — never undone) |
+
+Path is **never** taken from the client — the worktree path is looked up
+server-side from the cached model. `getData(true)` is forced before the
+guards run so the model is fresh. After success or failure the in-memory
+cache is invalidated (`cache.ts = 0`) so the next `/api/data` reflects
+reality.
+
+`gt submit --stack -u` (not just `gt submit -u`) is critical: without
+`--stack`, gt only pushes trunk-to-current-branch and silently skips
+descendants. Default push mode is `--force-with-lease`, which refuses if
+anyone else pushed to the branch since our last fetch.
 
 ## Caching model
 
@@ -234,9 +266,10 @@ initNotepad()         ─────────────────→ wir
 
 `wireDelegates()` runs after every render and is idempotent. Each loop uses
 its OWN flag (e.g. `_jumpWired`, `_copyWired`, `_actionWired`,
-`_stopToggleWired`, `_editNameWired`, `_toggleWired`, `_mdWired`). A shared
-`_wired` flag would collide when a single element matches multiple selectors
-(e.g. the stack-name pencil has both `data-stop-toggle` and `data-edit-name`).
+`_stopToggleWired`, `_editNameWired`, `_toggleWired`, `_mdWired`,
+`_restackWired`). A shared `_wired` flag would collide when a single element
+matches multiple selectors (e.g. the stack-name pencil has both
+`data-stop-toggle` and `data-edit-name`).
 
 It attaches:
 - `click` on `[data-toggle-card]` (card collapse toggle)
@@ -250,6 +283,9 @@ It attaches:
   events inside interactive children of the card-summary from triggering the
   card toggle)
 - `click` on `[data-edit-name]` (pencil icon — inline rename of stack name)
+- `click` on `[data-restack-stack]` (trunk-row Restack button → confirm dialog
+  → POST `/api/restack` → spinner → on success refresh data, on error
+  surface server message via `alert()`)
 
 ### localStorage keys
 
@@ -387,6 +423,32 @@ checks — ~28s baseline.
 10. **`marked.min.js` loads with `defer`.** It's available by the first
     `DOMContentLoaded`, not before. `wireMarkdownRemarks` has a
     `typeof window.marked === "undefined"` fallback for safety.
+
+11. **`gt sync` from the main checkout SKIPS worktree branches** — output
+    says `"Skipped syncing branch X because it is checked out in another
+    worktree"`. Most user stacks live in worktrees, so `gt sync` from main
+    only fast-forwards `main`; the actual restack must happen inside each
+    worktree (`gt restack` or `gt sync` there). This is exactly why the
+    dashboard's Restack button targets the worktree path, not the main
+    checkout.
+
+12. **`gt submit -u` without `--stack` skips descendants.** It pushes
+    trunk-to-current-branch only; branches above the current branch in the
+    stack are silently left unpushed. Always use `gt submit --stack -u`
+    when pushing programmatically. Bit us once during manual recovery —
+    only PRs Part 1-3 got pushed before we noticed Parts 4-6 were stale.
+
+13. **`behind_origin` is per-stack, not global.** It's measured as
+    `merge-base(leaf, origin/main)..origin/main`. Two stacks based off
+    different commits of main can have different counts, even on the
+    same dashboard load. Don't compute it once and reuse.
+
+14. **The trunk-row badge is hidden when `stack.upstream` is set.** The
+    "behind origin/main" measurement walks past the upstream fork and
+    over-reports for stacks built on someone else's PRs. Hiding it avoids
+    suggesting a restack that would skip past the upstream author's work.
+    The server endpoint also refuses for these stacks as a second line
+    of defense.
 
 ## Operations
 
