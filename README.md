@@ -4,11 +4,13 @@ Self-updating PR/stack dashboard. Polls `gt log`, `gh pr list`, Claude session
 files, and Jira itself — no Claude tokens at runtime except for the explicit
 🧠 Intelligent and ⟳ Generate buttons.
 
-Lives outside the rcode repo so it has its own git history and isn't affected
-by repo operations. The `REPO` / `SESSIONS_ROOT` constants in `server.js` point
-back at rcode for shell calls.
+Lives at `~/dashboard/` with its own private GitHub repo
+(<https://github.com/varunpatil-rvf/dashboard>). The `REPO` / `SESSIONS_ROOT`
+constants at the top of `server.js` point back at rcode for shell calls.
 
 ## Run
+
+Auto-starts at login under launchd. To start manually:
 
 ```sh
 cd ~/dashboard
@@ -32,33 +34,95 @@ Then `source ~/.zshrc` (or open a new terminal) and start the server.
 Without these vars the dashboard still works — Jira chips and the Untouched
 Jira section just won't populate. Recommendations still work without Jira.
 
+## Layout
+
+Three sticky columns — header, sidebar, and notepad all stay in place while
+the main column scrolls.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  header  (title · ↻ Refresh · Auto · 🧠 Intelligent · timestamps)│ ← sticky
+├──────────┬─────────────────────────────────────────┬─────────────┤
+│ sidebar  │  main column                            │ notepad     │
+│  · jump  │   · stat summary                        │  · markdown │
+│    nav   │   · active stacks                       │    scratch  │
+│  · stack │   · merged stacks                       │    pad      │
+│    list  │   · untouched Jira (sprint-filtered)    │             │
+│          │   · stale worktrees                     │             │
+│          │   · recommendations                     │             │
+└──────────┴─────────────────────────────────────────┴─────────────┘
+```
+
+Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
+
 ## Features
 
+### Stack cards
+- **Default collapsed** — click summary to expand. **Collapse all / Expand all**
+  toggle in the header.
+- Always-visible header: `#N` index, name, top PR link, worktree, Jira chips,
+  status pill, counts (created / approved / pending / changes-requested),
+  total comments (`💬 12 comments` — red if any human comments).
+- Always-visible body: ✓ Mark complete button, 💻 `cldr <session>` resume copy,
+  📝 markdown Remarks.
+- Expand to see the per-PR list (with status, thread counts, draft markers)
+  and any upstream PRs by other authors (collapsed by default).
+- **✎ Rename a stack** — pencil icon on hover. Inline edit, persists in
+  localStorage, takes priority over Claude-generated names. Reflected in the
+  sidebar nav too.
+- **Mark complete** → moves to "Merged stacks" with a `git worktree remove`
+  copy button.
+
+### Untouched Jira
+- Per-row "working today" toggle, markdown remarks, type badge, sprint cell.
+- **Sprint filter dropdown** — defaults to "Current sprint" (the most-active
+  sprint by ticket count, with active state preferred). Switchable to All / No
+  sprint / individual sprints.
+- **Remarks migration** — if you wrote a note for `REV-XXXX` in the Untouched
+  table, then later a PR stack appears tagged with that key, the note migrates
+  into the stack's Remarks (with a `↳ from REV-XXXX` annotation).
+
+### Refresh model
 - **Auto-refresh every 10 minutes** of stack/PR/Jira data (toggle in header).
-  Auto-refresh **never** triggers Claude calls.
-- **↻ Refresh** button forces a fresh data fetch (still no Claude).
-- **⟳ Generate** in the Recommendations section calls `claude -p` to
-  regenerate. Cached to disk in `cache/recommendations.json` so it survives
-  restart. Auto-refresh leaves it alone — only the explicit click regenerates.
-- **Mark stack complete** → moves to "Merged stacks" with a
-  `git worktree remove` copy button.
-- **Untouched Jira** table with per-row "working today" toggle + rich-text
-  remarks (persisted in localStorage).
-- **Per-stack remarks** (rich text, persisted in localStorage).
+  Never triggers Claude.
+- **↻ Refresh** button — same as auto, on demand. Shows `· Ns ago` next to
+  it.
+- **🧠 Intelligent** — wipes stack-name cache and regenerates recommendations.
+  Uses Claude. Shows `· intel Nm ago` so you know how stale that side is.
+- **⟳ Generate** in the Recommendations section — regenerates only recs.
+
+### Markdown notepad + remarks
+- Right-side scratchpad and every remarks field (per-stack, per-Jira-row) are
+  full markdown — GFM via [`marked`](https://marked.js.org/).
+- Click → textarea with raw markdown, autofocused. Auto-resizes with content.
+- Blur / Escape / Cmd+Enter → save + render.
+- Edit-mode shortcuts: `Cmd/Ctrl+B`, `Cmd/Ctrl+I`, `Cmd/Ctrl+K` wrap the
+  selection.
+- Notepad persists at `dashboard.notepad` in localStorage.
+
+### Other
 - **Jira chips** on each stack — clickable "REV-XXXX — Title" pills.
-- **Stale worktree detection** with worktree-remove commands.
+- **Sidebar jump nav** — click any section or stack name to scroll into
+  view (auto-expands the target card).
+- **Stale worktree detection** with worktree-remove copy commands.
+- **Resume session** — `cldr <session-id>` (or `cd worktree && cldr` if the
+  session lived in a worktree).
 
 ## Data sources
 
 - `gt log short --no-interactive --classic` — stack tree
-- `gh pr list` — open PRs (filtered to me, client-side)
+- `gh pr list` — open PRs (fetched without `--author`, filtered client-side)
 - `gh api repos/revefi/rcode/pulls?state=closed` — recent merges
-- `gh api graphql` — unresolved review threads per PR
+- `gh api graphql` — review-thread counts for ALL open PRs in **one** aliased
+  GraphQL query (one round-trip, not one per PR)
 - `gh pr view <n>` — upstream PR metadata
 - `git worktree list --porcelain` — worktrees
-- `~/.claude/projects/.../.jsonl` — session files (grep-scored per stack)
-- `revefi.atlassian.net/rest/api/3/...` — Jira tickets and summaries
-- `claude -p` — recommendations (manual trigger only)
+- `~/.claude/projects/.../.jsonl` — session files (parallel grep-scored per stack)
+- `revefi.atlassian.net/rest/api/3/...` — Jira tickets and search via REST
+- `claude -p` — recommendations + stack name generation
+
+Plain refresh end-to-end is ~8s. Most of that is the bulk GraphQL response
+time and a few `gh` subprocess spawns.
 
 ## Caching
 
@@ -69,25 +133,24 @@ Jira section just won't populate. Recommendations still work without Jira.
 | `/api/recommendations` | disk-persisted forever                         | **⟳ Generate** click           |
 
 Jira tickets and the Untouched Jira list have **no cache** — every plain
-↻ Refresh fetches them fresh via direct REST (~50ms per ticket, ~200ms for the
-search). They were cached for 12h in an earlier iteration; that cache was
-removed once direct REST started working.
+↻ Refresh fetches them fresh via direct REST (~50ms per ticket, ~200ms for
+the search).
 
 ## Auto-start on login
 
-Wired up via launchd. The plist invokes `start.sh`, which sources asdf (so the
-`node` shim resolves under launchd's bare PATH) and pulls `ATLASSIAN_*` from
-`~/.zshrc`. Both files live in this directory:
-
-- `start.sh` — launchd wrapper script
-- `~/Library/LaunchAgents/com.varun.dashboard.plist` — launchd job definition
-
-To control it:
+Wired up via launchd. The plist invokes `start.sh`, which:
+- Hardcodes the concrete `node` binary path (`~/.asdf/installs/nodejs/<ver>/bin/node`).
+  asdf shims don't work because launchd's TCC profile blocks reads of
+  `~/.tool-versions` and `~/.asdfrc`.
+- Sets an explicit `PATH` covering `gt`, `gh`, `git`, `claude`, etc.
+- Pulls `ATLASSIAN_*` exports from `~/.zshrc` via `grep + eval` (no full zshrc
+  source — avoids oh-my-zsh side effects).
 
 ```sh
 launchctl load   ~/Library/LaunchAgents/com.varun.dashboard.plist   # start
 launchctl unload ~/Library/LaunchAgents/com.varun.dashboard.plist   # stop
 launchctl list | grep dashboard                                      # status
+launchctl kickstart -k gui/$(id -u)/com.varun.dashboard               # hot restart
 ```
 
 `KeepAlive` is on, so launchd auto-restarts on crash (with a 30s throttle).
@@ -100,7 +163,9 @@ Logs at `/tmp/dashboard.log` and `/tmp/dashboard.err`.
 
 ## Notes
 
-- Directory lives at `~/dashboard/`. Initialize it as its own git repo
-  (`git init`) if you want history/backup.
-- The `claude` CLI must be on `$PATH` for Recommendations to work. Uses your
-  active Claude session for billing.
+- The `claude` CLI must be on `$PATH` for stack name generation and
+  Recommendations to work. Uses your active Claude session for billing.
+- See `CLAUDE.md` for the full codebase guide (architecture, file map,
+  caching model, gotchas, performance notes).
+- After a `node` upgrade via `asdf install nodejs <new>`, edit one line in
+  `start.sh` to point `NODE_BIN` at the new install path.
