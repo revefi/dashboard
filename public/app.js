@@ -165,6 +165,36 @@ function renderResumeBtn(resume) {
   )} <span class="cp">copy</span></span>`;
 }
 
+function renderTrunkRow(stack) {
+  const behind = stack.behind_origin || 0;
+  // If the stack sits on someone else's PRs, the "behind origin/main" count is
+  // misleading (it spans past the upstream fork). Hide it entirely.
+  if (stack.upstream || behind === 0) {
+    return `<div class="stack-row trunk"><span class="stack-link" style="cursor:default">main (trunk)</span></div>`;
+  }
+  const label = `${behind} commit${behind === 1 ? "" : "s"} behind`;
+  const canRestack = !!stack.worktree?.path;
+  const tip = canRestack
+    ? `This stack's base is ${behind} commit${
+        behind === 1 ? "" : "s"
+      } behind origin/main. Click to restack onto origin/main (runs gt restack in ${stack.worktree.path}).`
+    : `This stack's base is ${behind} commit${
+        behind === 1 ? "" : "s"
+      } behind origin/main. No worktree — run gt sync from the main checkout to restack.`;
+  const action = canRestack
+    ? `<button class="trunk-restack-btn" data-restack-stack="${esc(
+        stack.stack_key
+      )}" title="${esc(tip)}">↻ Restack</button>`
+    : "";
+  return `<div class="stack-row trunk">
+    <span class="stack-link" style="cursor:default">
+      main (trunk)
+      <span class="trunk-behind" title="${esc(tip)}">⚠ ${esc(label)}</span>
+      ${action}
+    </span>
+  </div>`;
+}
+
 function renderStackCard(stack, isMerged, idx) {
   const completed = isMerged;
   const counts = stack.counts;
@@ -290,7 +320,7 @@ function renderStackCard(stack, isMerged, idx) {
             )
             .join("")}
           ${!completed ? renderUpstreamPRs(stack) : ""}
-          <div class="stack-row trunk"><span class="stack-link" style="cursor:default">main (trunk)</span></div>
+          ${renderTrunkRow(stack)}
         </div>
       </div>
     </div>`;
@@ -706,6 +736,17 @@ function wireDelegates() {
     });
   });
 
+  // Restack buttons (trunk row).
+  $$("[data-restack-stack]").forEach((el) => {
+    if (el._restackWired) return;
+    el._restackWired = true;
+    el.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleRestackClick(el);
+    });
+  });
+
   // Mark-complete / Restore buttons.
   $$('[data-action="complete"], [data-action="restore"]').forEach((el) => {
     if (el._actionWired) return;
@@ -969,6 +1010,50 @@ async function fetchRecs(force = false) {
 let currentData = null;
 let lastFetchTs = 0;
 let autoRefreshTimer = null;
+
+async function handleRestackClick(btn) {
+  const stackKey = btn.dataset.restackStack;
+  const stack = currentData?.stacks?.find((s) => s.stack_key === stackKey);
+  if (!stack) return;
+  const wt = stack.worktree?.path || "(unknown)";
+  const behind = stack.behind_origin || 0;
+  const ok = window.confirm(
+    `Restack "${stack.name}" onto origin/main and push?\n\n` +
+      `Runs in: ${wt}\n` +
+      `  1) gt restack — rebase ${behind} commit${
+        behind === 1 ? "" : "s"
+      } of upstream changes under your stack\n` +
+      `  2) gt submit --stack -u --no-edit --no-interactive — force-with-lease push every branch in the stack to update the PRs\n\n` +
+      `On merge conflict: rebase aborts, branches unchanged, nothing pushed.\n` +
+      `On push conflict (someone else pushed): force-with-lease refuses, local restack stays, branches not pushed.`
+  );
+  if (!ok) return;
+
+  const origHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Restacking + pushing…`;
+  try {
+    const res = await fetch("/api/restack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stack_key: stackKey }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.ok === false) {
+      const msg = body.error || res.statusText || "Restack failed";
+      window.alert(`Restack failed:\n\n${msg}`);
+      btn.disabled = false;
+      btn.innerHTML = origHTML;
+      return;
+    }
+    // Success — pull fresh data so the badge clears (or shows the new count).
+    await fetchData(true, false);
+  } catch (err) {
+    window.alert(`Restack failed:\n\n${err.message}`);
+    btn.disabled = false;
+    btn.innerHTML = origHTML;
+  }
+}
 
 async function fetchData(force = false, intelligent = false) {
   const btn = intelligent ? $("#refresh-intelligent-btn") : $("#refresh-btn");
