@@ -25,7 +25,7 @@ except via configured absolute paths in `server.js` (`REPO`, `SESSIONS_ROOT`).
 └── CLAUDE.md                (this file — codebase guide for future edits)
 
 ~/Library/LaunchAgents/
-└── com.varun.dashboard.plist   launchd job; runs ~/dashboard/start.sh on login
+└── com.<you>.dashboard.plist  launchd job; runs ~/dashboard/start.sh on login
 ```
 
 There are no `node_modules` and no build step on either side — Node 22's built-in
@@ -468,11 +468,11 @@ checks — ~28s baseline.
 
 ## Operations
 
-- Server runs under launchd. Plist: `~/Library/LaunchAgents/com.varun.dashboard.plist`.
-  - Start: `launchctl load ~/Library/LaunchAgents/com.varun.dashboard.plist`
-  - Stop:  `launchctl unload ~/Library/LaunchAgents/com.varun.dashboard.plist`
+- Server runs under launchd. Plist: `~/Library/LaunchAgents/com.<you>.dashboard.plist`.
+  - Start: `launchctl load ~/Library/LaunchAgents/com.<you>.dashboard.plist`
+  - Stop:  `launchctl unload ~/Library/LaunchAgents/com.<you>.dashboard.plist`
   - Status: `launchctl list | grep dashboard`
-  - Hot restart after code change: `launchctl kickstart -k gui/$(id -u)/com.varun.dashboard`
+  - Hot restart after code change: `launchctl kickstart -k gui/$(id -u)/com.<you>.dashboard`
 - Logs: `/tmp/dashboard.log`, `/tmp/dashboard.err`.
 - For server.js or start.sh changes you need a restart. For `public/*.js`,
   `public/*.css`, `public/*.html` — just hard-refresh the browser (Cmd+Shift+R).

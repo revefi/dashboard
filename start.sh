@@ -9,8 +9,8 @@
 set -e
 
 # Concrete tool paths. Update if you upgrade via asdf or move install location.
-NODE_BIN="/Users/varun/.asdf/installs/nodejs/24.13.1/bin/node"
-GH_DIR="/Users/varun/.asdf/installs/github-cli/2.86.0/bin"
+NODE_BIN="$HOME/.asdf/installs/nodejs/24.13.1/bin/node"
+GH_DIR="$HOME/.asdf/installs/github-cli/2.86.0/bin"
 
 # PATH for the server's shell-out calls. Order matters: prefer Homebrew over
 # system. Includes Homebrew (gt, jq, git), gh's concrete asdf install dir,
