@@ -70,7 +70,8 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
   review-thread counts, so it costs nothing extra.
 - **Copy-branch button** (`⎘`) on every PR row — one-click clipboard copy of
   the branch name, briefly flips to ✓ on success. Tooltip shows the full
-  branch name on hover.
+  branch name on hover. Auto-hidden on narrow widths (shows only when
+  viewport ≥ 1600px or the notepad is hidden) to keep the row uncluttered.
 - **Draft chip** — drafts show a single `📝 Draft` chip in place of the
   review pill (which would otherwise misleadingly say "Needs review" on a
   PR that isn't ready yet).

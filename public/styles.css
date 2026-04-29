@@ -826,9 +826,17 @@ h2 .muted {
   line-height: 1;
   border-radius: 6px;
   cursor: pointer;
-  display: inline-flex;
+  /* Hidden by default — only visible when there's room (wide viewport or
+     notepad collapsed). Other PR-row chips already crowd the line. */
+  display: none;
   align-items: center;
   justify-content: center;
+}
+@media (min-width: 1600px) {
+  .pr-copy-branch { display: inline-flex; }
+}
+.layout.notepad-hidden .pr-copy-branch {
+  display: inline-flex;
 }
 .pr-copy-branch:hover {
   border-color: var(--border);
