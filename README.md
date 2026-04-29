@@ -37,8 +37,14 @@ If both produce output without prompting for auth, you're set.
 Add these to `~/.zshrc` (or your shell init file):
 
 ```sh
-# Required — absolute path to your rcode checkout.
-export WORKSPACE_PATH=/Users/$USER/Desktop/workspace/rcode
+# Absolute path to your rcode checkout — wherever you cloned it.
+export WORKSPACE_PATH=/path/to/your/rcode
+
+# Atlassian credentials — power the Untouched Jira section, per-stack
+# Jira chips, and ticket-title context. Get a token at
+# https://id.atlassian.com/manage-profile/security/api-tokens.
+export ATLASSIAN_EMAIL="you@revefi.com"
+export ATLASSIAN_API_TOKEN="<token>"
 ```
 
 Then `source ~/.zshrc` (or open a new terminal). The server fails fast at
@@ -56,29 +62,12 @@ You should see:
 ```
 Live dashboard listening on http://localhost:7787
 Open in browser, or run:  open http://localhost:7787
-Jira: NOT configured (set ATLASSIAN_EMAIL + ATLASSIAN_API_TOKEN in .env)
+Jira: configured
 ```
 
 Open the URL in your browser. You're done.
 
-### 4. (Optional) Enable Jira integration
-
-The dashboard works fine without Jira — but enabling it unlocks the **Untouched
-Jira** section (tickets assigned to you that aren't yet attached to any open
-stack), the per-stack Jira chips, and ticket-title context everywhere a
-`REV-XXXX` shows up.
-
-Add to `~/.zshrc`:
-
-```sh
-export ATLASSIAN_EMAIL="you@revefi.com"
-export ATLASSIAN_API_TOKEN="<token>"
-```
-
-Get a token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
-Reload your shell, restart the server.
-
-### 5. (Optional) Auto-start on login
+### 4. (Optional) Auto-start on login
 
 If you'd rather not run `node server.js` manually each day, wire it up via
 launchd:
