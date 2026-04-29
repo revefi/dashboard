@@ -815,14 +815,14 @@ h2 .muted {
 }
 .pr-copy-branch {
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1;
   border-radius: 6px;
   cursor: pointer;
