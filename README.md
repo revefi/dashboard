@@ -18,21 +18,26 @@ node server.js
 # Then open http://localhost:7787
 ```
 
-## One-time setup (Jira)
+## One-time setup
 
-The server reads two env vars from your shell. Set them in `~/.zshrc` (or
+The server reads three env vars from your shell. Set them in `~/.zshrc` (or
 equivalent) so every shell session and the dashboard pick them up:
 
 ```sh
+# Required — absolute path to your rcode checkout.
+export WORKSPACE_PATH=/Users/$USER/Desktop/workspace/rcode
+
+# Optional — Jira chips + Untouched Jira section. Get a token at
+# https://id.atlassian.com/manage-profile/security/api-tokens.
 export ATLASSIAN_EMAIL="you@revefi.com"
 export ATLASSIAN_API_TOKEN="<token>"
 ```
 
-Get a token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
 Then `source ~/.zshrc` (or open a new terminal) and start the server.
 
-Without these vars the dashboard still works — Jira chips and the Untouched
-Jira section just won't populate. Recommendations still work without Jira.
+Without the Atlassian pair the dashboard still works — Jira chips and the
+Untouched Jira section just won't populate. Recommendations still work without
+Jira. The server fails fast if `WORKSPACE_PATH` is missing.
 
 ## Layout
 

@@ -4,7 +4,7 @@
 #     it can't read ~/.tool-versions),
 #   - set PATH so the server's child processes (`gt`, `gh`, `git`, `claude`,
 #     `grep`, `jq`) resolve,
-#   - pull ATLASSIAN_* from ~/.zshrc.
+#   - pull ATLASSIAN_* and WORKSPACE_PATH from ~/.zshrc.
 
 set -e
 
@@ -17,9 +17,10 @@ GH_DIR="/Users/varun/.asdf/installs/github-cli/2.86.0/bin"
 # ~/.local/bin (where `claude` lives), and the system base.
 export PATH="/opt/homebrew/bin:$GH_DIR:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# Pull only the ATLASSIAN exports from zshrc — no oh-my-zsh side effects,
-# secrets stay where they already live (zshrc), not in this script.
-eval "$(grep -E '^export ATLASSIAN_' "$HOME/.zshrc")"
+# Pull only the env vars we need (ATLASSIAN_*, WORKSPACE_PATH) from zshrc —
+# no oh-my-zsh side effects, secrets stay where they already live (zshrc),
+# not in this script.
+eval "$(grep -E '^export (ATLASSIAN_|WORKSPACE_PATH=)' "$HOME/.zshrc")"
 
 cd "$(dirname "$0")"
 exec "$NODE_BIN" server.js

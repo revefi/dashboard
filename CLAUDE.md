@@ -68,7 +68,7 @@ Sections, in order, separated by `// ----------` banner comments:
 
 | Section | What it does |
 | --- | --- |
-| **constants** | `REPO`, `SESSIONS_ROOT`, `PORT`, `CACHE_DIR`, file paths |
+| **constants** | `REPO` (from `process.env.WORKSPACE_PATH` — required), `SESSIONS_ROOT` (`$HOME/.claude/projects`), `MAIN_SESSIONS_DIR` (derived via `encodeProjectDir(REPO)`), `PORT`, `CACHE_DIR`, file paths |
 | **shell helpers** | `sh()`, `shRetry()`, `shWithInput()` — promisified `exec` / `spawn` with retry / stdin pipe |
 | **gt log parsing** | `parseGtLog()`, `buildStacksFromGtLog()` — text → tree |
 | **worktrees** | `fetchWorktrees()` from `git worktree list --porcelain` |
@@ -481,13 +481,26 @@ checks — ~28s baseline.
 
 ## Configuration
 
-Two env vars must be in the launchd job's environment for full functionality:
+Three env vars are read from `~/.zshrc` (via `start.sh`'s `grep + eval` pull —
+no full zshrc source, so oh-my-zsh side effects are avoided):
 
-- `ATLASSIAN_EMAIL` — for Jira REST auth
-- `ATLASSIAN_API_TOKEN` — get one at https://id.atlassian.com/manage-profile/security/api-tokens
+- `WORKSPACE_PATH` — **required.** Absolute path to the rcode checkout
+  (e.g. `/Users/<you>/Desktop/workspace/rcode`). The server fails fast at
+  startup if it's missing.
+- `ATLASSIAN_EMAIL` — optional, for Jira REST auth.
+- `ATLASSIAN_API_TOKEN` — optional. Get one at
+  https://id.atlassian.com/manage-profile/security/api-tokens.
 
-Both are sourced from `~/.zshrc` by `start.sh` (via `grep -E '^export ATLASSIAN_' "$HOME/.zshrc"` then `eval`) so they don't need to live in the launchd plist itself. Without them, the dashboard still works — the Untouched Jira section and stack-card chip summaries just don't populate (the UI shows a "Jira not configured" hint).
+Without the Atlassian pair the dashboard still works — the Untouched Jira
+section and stack-card chip summaries just don't populate (the UI shows a
+"Jira not configured" hint).
 
-The `REPO` and `SESSIONS_ROOT` constants at the top of `server.js` point at
-the rcode repo and your Claude project sessions dir. Change these if you ever
-repurpose the dashboard for a different project.
+`MAIN_SESSIONS_DIR` is derived from `WORKSPACE_PATH` via `encodeProjectDir`,
+which mirrors how the `claude` CLI names project dirs under
+`~/.claude/projects/` — every non-alphanumeric, non-hyphen character becomes
+`-`. Worktree session dirs are computed the same way from
+`${REPO}/.claude/worktrees/<name>`.
+
+`revefi/rcode` and `revefi.atlassian.net` are intentionally hardcoded — they're
+constants for everyone in the company. If you ever fork this for another org,
+those are the only two values to swap.

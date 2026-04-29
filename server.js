@@ -11,9 +11,23 @@ const { promisify } = require("util");
 const execP = promisify(exec);
 const execFileP = promisify(execFile);
 
-const REPO = "/Users/varun/Desktop/workspace/rcode";
-const SESSIONS_ROOT = "/Users/varun/.claude/projects";
-const MAIN_SESSIONS_DIR = `${SESSIONS_ROOT}/-Users-varun-Desktop-workspace-rcode`;
+// Claude session dir name = the absolute project path with every non-alnum,
+// non-hyphen character replaced by "-". Matches what `claude` CLI produces
+// under ~/.claude/projects/.
+function encodeProjectDir(absPath) {
+  return absPath.replace(/[^A-Za-z0-9-]/g, "-");
+}
+
+const REPO = process.env.WORKSPACE_PATH;
+if (!REPO) {
+  console.error(
+    "ERROR: WORKSPACE_PATH env var not set. Add `export WORKSPACE_PATH=/path/to/rcode` to ~/.zshrc and reload."
+  );
+  process.exit(1);
+}
+const HOME = process.env.HOME || "/";
+const SESSIONS_ROOT = path.join(HOME, ".claude", "projects");
+const MAIN_SESSIONS_DIR = path.join(SESSIONS_ROOT, encodeProjectDir(REPO));
 const PORT = parseInt(process.env.PORT || "7787", 10);
 const CACHE_TTL_MS = 30_000;
 const STATIC_DIR = path.join(__dirname, "public");
@@ -225,9 +239,10 @@ async function fetchOpenPRs() {
 }
 
 async function fetchRecentMergedPRs() {
+  const login = await getLogin();
   const stdout = await shRetry(
     `gh api "repos/revefi/rcode/pulls?state=closed&per_page=50" ` +
-      `--jq '[.[] | select(.user.login | test("varun"; "i")) | select(.merged_at != null) | ` +
+      `--jq '[.[] | select(.user.login == "${login}") | select(.merged_at != null) | ` +
       `{n: .number, h: .head.ref, b: .base.ref, m: .merged_at, t: .title}]'`
   );
   return JSON.parse(stdout || "[]");
@@ -617,7 +632,10 @@ async function scoreSessionsForStack(keywords, worktreeName) {
   const dirs = [MAIN_SESSIONS_DIR];
   if (worktreeName) {
     dirs.push(
-      `${SESSIONS_ROOT}/-Users-varun-Desktop-workspace-rcode--claude-worktrees-${worktreeName}`
+      path.join(
+        SESSIONS_ROOT,
+        encodeProjectDir(`${REPO}/.claude/worktrees/${worktreeName}`)
+      )
     );
   }
   const pat = keywords
