@@ -103,7 +103,12 @@ function renderPrRow(pr, opts = {}) {
           pr.human_comments || 0
         }h</span>/<span class="b">${pr.bot_comments || 0}b</span></span>`
       : "";
-  const draft = pr.is_draft ? " 📝" : "";
+  const checksChip = renderChecksChip(pr.checks);
+  // Drafts replace the review-status pill with a single Draft chip — review
+  // states like "Needs review" are misleading on drafts that aren't ready.
+  const statusPill = pr.is_draft
+    ? `<span class="stack-status draft" title="PR is in draft — open it to mark ready for review.">📝 Draft</span>`
+    : `<span class="stack-status ${cls}">${esc(pr.status_label)}</span>`;
   return `
     <div class="stack-row ${cls}">
       <a class="stack-link" href="${esc(
@@ -111,13 +116,41 @@ function renderPrRow(pr, opts = {}) {
       )}" target="_blank" rel="noopener">
         <span class="stack-num">#${pr.num}</span>
         ${jira}
-        <span class="stack-pr-title">${esc(pr.title)}${draft}</span>
+        <span class="stack-pr-title">${esc(pr.title)}</span>
         ${author}
       </a>
       ${comments}
-      <span class="stack-status ${cls}">${esc(pr.status_label)}</span>
+      ${checksChip}
+      ${statusPill}
       <span class="stack-time">${esc(pr.updated_label || "")}</span>
     </div>`;
+}
+
+function renderChecksChip(checks) {
+  if (!checks || !checks.state) return "";
+  const { state, failing, running, total } = checks;
+  if (state === "SUCCESS") {
+    return `<span class="stack-checks ok" title="${total} check${
+      total === 1 ? "" : "s"
+    } passed">✓ checks</span>`;
+  }
+  if (state === "FAILURE" || state === "ERROR") {
+    const names = failing.length ? failing : ["(unknown)"];
+    const tip = `${failing.length} failing check${
+      failing.length === 1 ? "" : "s"
+    }:\n  ${names.join("\n  ")}`;
+    return `<span class="stack-checks fail" title="${esc(tip)}">✗ ${
+      failing.length || "?"
+    } failing</span>`;
+  }
+  if (state === "PENDING" || state === "EXPECTED") {
+    return `<span class="stack-checks pending" title="${
+      running || total
+    } check${
+      (running || total) === 1 ? "" : "s"
+    } in progress">● running</span>`;
+  }
+  return "";
 }
 
 function renderUpstreamBanner(stack) {

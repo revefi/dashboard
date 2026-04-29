@@ -72,7 +72,7 @@ Sections, in order, separated by `// ----------` banner comments:
 | **shell helpers** | `sh()`, `shRetry()`, `shWithInput()` — promisified `exec` / `spawn` with retry / stdin pipe |
 | **gt log parsing** | `parseGtLog()`, `buildStacksFromGtLog()` — text → tree |
 | **worktrees** | `fetchWorktrees()` from `git worktree list --porcelain` |
-| **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchReviewThreadsBulk` (one aliased GraphQL query for all PRs) |
+| **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchPrSignalsBulk` (one aliased GraphQL query that returns review-thread counts AND CI `statusCheckRollup` for every user PR), `summarizeChecks` (rollup → `{state, failing[], running, total}`) |
 | **trunk freshness** | `fetchOriginMain` (read-only `git fetch origin main`), `fetchStackBehind(branch)` (per-stack count of commits ahead of the stack's fork point on origin/main), `checkRestackConflicts(branch)` (in-memory 3-way merge via `git merge-tree --write-tree`; returns clean/conflicts list/null) |
 | **restack action** | `restackStack(stackKey)` — guarded `gt restack` + `gt submit --stack -u` in the stack's worktree; `isRebaseInProgress(wt)` (rebase-state probe); `readJson(req)` (POST-body parser) |
 | **Claude CLI** | `callClaude()`, `parseJsonLoose()`, disk-cache helpers |
@@ -95,7 +95,8 @@ Sections, in order, separated by `// ----------` banner comments:
      partition into user_segment (your PRs)
                   + upstream_segment (parent PRs by others)
 4. fetch upstream PR metadata (gh pr view per branch, parallel)
-5. fetch review-thread counts (one bulk GraphQL query, aliased fields per PR)
+5. fetch review-thread counts + CI check rollups (one bulk GraphQL query,
+   aliased fields per PR — `fetchPrSignalsBulk`)
 6. kick off session scoring for ALL stacks in parallel up front
    + per-stack `fetchStackBehind` (merge-base + rev-list) in parallel
    + per-stack `checkRestackConflicts` (merge-tree probe) in parallel
@@ -136,6 +137,7 @@ Pr = {
   num, url, title, jira_tag, part_tag,
   is_draft, decision, status_label, status_class,
   human_comments, bot_comments, updated_label, needs_restack,
+  checks: null | { state, failing: [name], running, total }, // null on drafts
 }
 ```
 
@@ -367,7 +369,7 @@ Plain refresh ≈ 8s. The sequence (after parallelization):
 | --- | --- |
 | `gt log` + `gh pr list` + recent merged + worktrees | ~1.5s parallel |
 | Upstream `fetchAnyPR` × N + `fetchPRMeta` × N | ~1s parallel (often N=0) |
-| `fetchReviewThreadsBulk` for all open user PRs | ~2-3s — single aliased GraphQL query, **not** one-call-per-PR |
+| `fetchPrSignalsBulk` for all open user PRs | ~2-3s — single aliased GraphQL query returning review threads + CI rollup, **not** one-call-per-PR |
 | Session scoring (~60 JSONL files × N stacks) | ~1s — files parallel within scoring, all stacks scored concurrently |
 | Stack-name generation | 0s (cached) or ~5s (cold) |
 | Jira REST × N + Jira search | <1s parallel |

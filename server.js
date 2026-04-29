@@ -257,10 +257,11 @@ async function fetchPRMeta(num) {
   }
 }
 
-// Fetch unresolved review-thread counts for many PRs in a single GraphQL request.
-// Uses aliased fields (`p<NUM>: repository(...) { pullRequest(number: NUM) {...} }`)
-// so we get the full set in one network round-trip instead of one per PR.
-async function fetchReviewThreadsBulk(nums) {
+// Fetch unresolved review-thread counts AND CI check rollup for many PRs in
+// a single GraphQL request. Uses aliased fields
+// (`p<NUM>: repository(...) { pullRequest(number: NUM) {...} }`) so we get
+// the full set in one network round-trip instead of one per PR.
+async function fetchPrSignalsBulk(nums) {
   if (!nums || nums.length === 0) return new Map();
   const aliasFor = (n) => `p${n}`;
   const fragments = nums
@@ -271,6 +272,22 @@ async function fetchReviewThreadsBulk(nums) {
       reviewThreads(first: 50) {
         nodes { isResolved comments(first: 1) { nodes { author { login } } } }
       }
+      commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              state
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun { name conclusion status }
+                  ... on StatusContext { context state }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }`
     )
@@ -278,30 +295,70 @@ async function fetchReviewThreadsBulk(nums) {
   const query = `query {${fragments}\n}`;
 
   const result = new Map();
-  for (const n of nums) result.set(n, { human: 0, bot: 0 });
+  for (const n of nums) {
+    result.set(n, { human: 0, bot: 0, checks: null });
+  }
   try {
-    const stdout = await shWithInput(
-      `gh api graphql -F query=@-`,
-      query
-    );
+    const stdout = await shWithInput(`gh api graphql -F query=@-`, query);
     const json = JSON.parse(stdout);
     const data = json?.data || {};
     for (const n of nums) {
-      const nodes = data[aliasFor(n)]?.pullRequest?.reviewThreads?.nodes || [];
+      const pr = data[aliasFor(n)]?.pullRequest;
+      const threadNodes = pr?.reviewThreads?.nodes || [];
       let h = 0,
         b = 0;
-      for (const node of nodes) {
+      for (const node of threadNodes) {
         if (node.isResolved) continue;
         const isBot = node.comments?.nodes?.[0]?.author?.login === "claude";
         if (isBot) b++;
         else h++;
       }
-      result.set(n, { human: h, bot: b });
+      result.set(n, {
+        human: h,
+        bot: b,
+        checks: summarizeChecks(pr?.commits?.nodes?.[0]?.commit?.statusCheckRollup),
+      });
     }
   } catch (err) {
-    console.warn("[review-threads] bulk fetch failed:", err.message);
+    console.warn("[pr-signals] bulk fetch failed:", err.message);
   }
   return result;
+}
+
+// Collapse the GraphQL statusCheckRollup into the shape the dashboard needs.
+// `state` is GitHub's authoritative roll-up; `failing` lists individual check
+// names so the tooltip can show what to fix.
+function summarizeChecks(rollup) {
+  if (!rollup) return null;
+  const FAIL_CONCLUSIONS = new Set([
+    "FAILURE",
+    "TIMED_OUT",
+    "CANCELLED",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+  ]);
+  const FAIL_STATUSES = new Set(["FAILURE", "ERROR"]);
+  const ctxNodes = rollup.contexts?.nodes || [];
+  const failing = [];
+  let running = 0;
+  let total = 0;
+  for (const c of ctxNodes) {
+    total++;
+    if (c.__typename === "CheckRun") {
+      if (c.status === "IN_PROGRESS" || c.status === "QUEUED") running++;
+      else if (c.conclusion && FAIL_CONCLUSIONS.has(c.conclusion))
+        failing.push(c.name);
+    } else if (c.__typename === "StatusContext") {
+      if (c.state === "PENDING") running++;
+      else if (c.state && FAIL_STATUSES.has(c.state)) failing.push(c.context);
+    }
+  }
+  return {
+    state: rollup.state || null,
+    failing,
+    running,
+    total,
+  };
 }
 
 // ---------- Claude CLI helper ----------
@@ -698,7 +755,7 @@ async function buildModel() {
   const allUserPRNums = enrichedStacks.flatMap((s) =>
     s.userBranches.filter((u) => u.pr && !u.isMerged).map((u) => u.pr.number)
   );
-  const threadCounts = await fetchReviewThreadsBulk(allUserPRNums);
+  const prSignals = await fetchPrSignalsBulk(allUserPRNums);
 
   // Pre-compute jiraKeys + worktree per stack so we can kick off all session-scoring
   // calls in parallel up front (each scoring call grep's ~60 JSONL files; serializing
@@ -759,7 +816,11 @@ async function buildModel() {
         isBottom,
         true
       );
-      const tc = threadCounts.get(u.pr.number) || { human: 0, bot: 0 };
+      const sig = prSignals.get(u.pr.number) || {
+        human: 0,
+        bot: 0,
+        checks: null,
+      };
       return {
         num: u.pr.number,
         url: `https://app.graphite.com/github/pr/revefi/rcode/${u.pr.number}`,
@@ -770,8 +831,11 @@ async function buildModel() {
         decision: u.pr.reviewDecision || "REVIEW_REQUIRED",
         status_label: status.label,
         status_class: status.cls,
-        human_comments: tc.human,
-        bot_comments: tc.bot,
+        human_comments: sig.human,
+        bot_comments: sig.bot,
+        // Suppress check chip on drafts — CI may not run, and the review
+        // pill will already be replaced by a "Draft" chip on the frontend.
+        checks: u.pr.isDraft ? null : sig.checks,
         updated_label: relTime(u.pr.updatedAt),
         needs_restack: u.flags && u.flags.includes("needs restack"),
       };

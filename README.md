@@ -63,6 +63,14 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
 - Always-visible header: `#N` index, name, top PR link, worktree, Jira chips,
   status pill, counts (created / approved / pending / changes-requested),
   total comments (`💬 12 comments` — red if any human comments).
+- **Per-PR CI rollup** in the expanded list: green `✓ checks` when all pass,
+  red `✗ N failing` (with the failing check names in the tooltip), or amber
+  `● running` while jobs are in progress. Suppressed for drafts. Pulled from
+  GitHub's `statusCheckRollup` in the same bulk GraphQL request as the
+  review-thread counts, so it costs nothing extra.
+- **Draft chip** — drafts show a single `📝 Draft` chip in place of the
+  review pill (which would otherwise misleadingly say "Needs review" on a
+  PR that isn't ready yet).
 - Always-visible body: ✓ Mark complete button, 💻 `cldr <session>` resume copy,
   📝 markdown Remarks.
 - Expand to see the per-PR list (with status, thread counts, draft markers)
