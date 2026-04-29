@@ -116,7 +116,7 @@ function renderPrRow(pr, opts = {}) {
       )}" target="_blank" rel="noopener">
         <span class="stack-num">#${pr.num}</span>
         ${jira}
-        <span class="stack-pr-title">${esc(pr.title)}</span>
+        <span class="stack-pr-title" title="${esc(pr.title)}">${esc(pr.title)}</span>
         ${author}
       </a>
       ${comments}

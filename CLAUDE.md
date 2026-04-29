@@ -455,6 +455,16 @@ checks — ~28s baseline.
     The server endpoint also refuses for these stacks as a second line
     of defense.
 
+15. **GitHub's `statusCheckRollup.contexts` returns superseded check runs.**
+    When a CI run is preempted (a new push, a re-run, etc.), GitHub leaves
+    the old `CheckRun` row in place with `conclusion: CANCELLED` and adds
+    a new row for the latest run. Naively iterating `contexts` double-
+    counts every check, with the old CANCELLED treated as a failure.
+    Even the rollup `state` field is unreliable for the same reason —
+    it can return `FAILURE` while `gh pr checks` shows the PR passing.
+    `summarizeChecks` deduplicates by name (latest by `startedAt` /
+    `createdAt`) and computes its own state from the surviving runs.
+
 ## Operations
 
 - Server runs under launchd. Plist: `~/Library/LaunchAgents/com.varun.dashboard.plist`.

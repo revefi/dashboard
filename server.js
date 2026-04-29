@@ -276,12 +276,11 @@ async function fetchPrSignalsBulk(nums) {
         nodes {
           commit {
             statusCheckRollup {
-              state
               contexts(first: 100) {
                 nodes {
                   __typename
-                  ... on CheckRun { name conclusion status }
-                  ... on StatusContext { context state }
+                  ... on CheckRun { name conclusion status startedAt }
+                  ... on StatusContext { context state createdAt }
                 }
               }
             }
@@ -326,39 +325,71 @@ async function fetchPrSignalsBulk(nums) {
 }
 
 // Collapse the GraphQL statusCheckRollup into the shape the dashboard needs.
-// `state` is GitHub's authoritative roll-up; `failing` lists individual check
-// names so the tooltip can show what to fix.
+//
+// Critical: we DEDUPE by check name and keep only the latest run. When a CI
+// re-run happens (or a workflow gets superseded by a new push), the earlier
+// run is left in place with conclusion=CANCELLED — counting those as
+// failures is wrong (and is exactly why GitHub's own `state` field returns
+// FAILURE while `gh pr checks` shows the PR as passing). Dedup gives us the
+// same view as `gh pr checks`.
 function summarizeChecks(rollup) {
   if (!rollup) return null;
   const FAIL_CONCLUSIONS = new Set([
     "FAILURE",
     "TIMED_OUT",
-    "CANCELLED",
     "ACTION_REQUIRED",
     "STARTUP_FAILURE",
   ]);
   const FAIL_STATUSES = new Set(["FAILURE", "ERROR"]);
   const ctxNodes = rollup.contexts?.nodes || [];
+
+  // Keep the latest run per name. CheckRun → use startedAt; StatusContext →
+  // use createdAt. Both are ISO 8601 strings so plain string compare works.
+  const latest = new Map(); // name → node
+  for (const c of ctxNodes) {
+    const name =
+      c.__typename === "CheckRun"
+        ? c.name
+        : c.__typename === "StatusContext"
+        ? c.context
+        : null;
+    if (!name) continue;
+    const ts = c.startedAt || c.createdAt || "";
+    const key = `${c.__typename}:${name}`;
+    const prev = latest.get(key);
+    if (!prev || ts > (prev.startedAt || prev.createdAt || "")) {
+      latest.set(key, c);
+    }
+  }
+
   const failing = [];
   let running = 0;
   let total = 0;
-  for (const c of ctxNodes) {
+  for (const c of latest.values()) {
     total++;
     if (c.__typename === "CheckRun") {
-      if (c.status === "IN_PROGRESS" || c.status === "QUEUED") running++;
-      else if (c.conclusion && FAIL_CONCLUSIONS.has(c.conclusion))
+      if (c.status === "IN_PROGRESS" || c.status === "QUEUED" || c.status === "PENDING") {
+        running++;
+      } else if (c.conclusion && FAIL_CONCLUSIONS.has(c.conclusion)) {
         failing.push(c.name);
+      }
+      // CANCELLED / SKIPPED / NEUTRAL on the *latest* run aren't treated as
+      // failures — matches `gh pr checks` and Graphite.
     } else if (c.__typename === "StatusContext") {
-      if (c.state === "PENDING") running++;
+      if (c.state === "PENDING" || c.state === "EXPECTED") running++;
       else if (c.state && FAIL_STATUSES.has(c.state)) failing.push(c.context);
     }
   }
-  return {
-    state: rollup.state || null,
-    failing,
-    running,
-    total,
-  };
+
+  // Compute our own rollup state — GitHub's `state` field counts the
+  // superseded runs.
+  let state;
+  if (failing.length > 0) state = "FAILURE";
+  else if (running > 0) state = "PENDING";
+  else if (total > 0) state = "SUCCESS";
+  else state = null;
+
+  return { state, failing, running, total };
 }
 
 // ---------- Claude CLI helper ----------
