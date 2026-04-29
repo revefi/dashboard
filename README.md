@@ -81,6 +81,13 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
   and your branches are unchanged; on push conflict the local restack stays
   and you retry the push manually. Hidden on stacks with upstream PRs (the
   count would be misleading there).
+- **Pre-flight conflict prediction** — alongside the behind count, each stack
+  shows `✓ mergeable` (green) or `✗ conflicts: <files>` (red, with the full
+  list in the tooltip). Computed via `git merge-tree --write-tree` — a
+  read-only in-memory 3-way merge against `origin/main`. When conflicts are
+  predicted the Restack button is disabled and the server endpoint also
+  refuses, so you find out before you click rather than from a half-aborted
+  rebase.
 
 ### Untouched Jira
 - Per-row "working today" toggle, markdown remarks, type badge, sprint cell.
@@ -128,6 +135,8 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
 - `git worktree list --porcelain` — worktrees
 - `git fetch origin main --quiet` + `git rev-list --count` — per-stack
   "behind origin/main" measurement (read-only; never modifies branches)
+- `git merge-tree --write-tree --name-only` — per-stack conflict prediction
+  for the Restack button (read-only; writes loose objects but no refs)
 - `~/.claude/projects/.../.jsonl` — session files (parallel grep-scored per stack)
 - `revefi.atlassian.net/rest/api/3/...` — Jira tickets and search via REST
 - `claude -p` — recommendations + stack name generation

@@ -174,6 +174,32 @@ async function fetchStackBehind(branch) {
   }
 }
 
+// Predict whether `gt restack` will hit conflicts by performing an in-memory
+// 3-way merge between origin/main and the stack's leaf branch. Read-only —
+// `git merge-tree --write-tree` writes objects to the loose-object store but
+// never modifies refs or working trees. Exit 0 = clean, 1 = conflicts (with
+// conflicting paths listed after the tree OID).
+async function checkRestackConflicts(branch) {
+  try {
+    const { stdout } = await execP(
+      `git merge-tree --write-tree --name-only --no-messages origin/main ${branch}`,
+      { cwd: REPO, maxBuffer: 5 * 1024 * 1024 }
+    );
+    // exit 0 — first line is tree OID, no further output.
+    return { ok: true, conflicts: [] };
+  } catch (e) {
+    if (e.code === 1 && e.stdout) {
+      const lines = e.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+      // First line is the (incomplete) tree OID; the rest are conflicting paths.
+      const conflicts = [...new Set(lines.slice(1))];
+      return { ok: false, conflicts };
+    }
+    // Other errors (missing branch, missing origin/main, etc.) — return null
+    // so the UI can fall back to "unknown" rather than claiming success.
+    return null;
+  }
+}
+
 // ---------- PRs ----------
 const GH_REPO_FLAG = "--repo revefi/rcode";
 let cachedLogin = null;
@@ -712,6 +738,12 @@ async function buildModel() {
   const behindPromises = enrichedMeta.map((m) =>
     fetchStackBehind(m.es.userBranches[0].branch)
   );
+  // Per-stack restack-conflict prediction (in-memory 3-way merge against
+  // origin/main). Lets the UI disable the Restack button when conflicts
+  // are guaranteed.
+  const conflictPromises = enrichedMeta.map((m) =>
+    checkRestackConflicts(m.es.userBranches[0].branch)
+  );
 
   // Build final model.
   const stacks = [];
@@ -848,9 +880,10 @@ async function buildModel() {
         ? jiraKeys.join("+")
         : `NO-JIRA-${es.userBranches[es.userBranches.length - 1].branch}`;
 
-    // Resume session + behind promises were kicked off up front in parallel.
+    // Resume session + behind + conflict promises were kicked off up front.
     const resume = await resumePromises[stackIdx];
     const behindOrigin = await behindPromises[stackIdx];
+    const restackCheck = await conflictPromises[stackIdx];
 
     stacks.push({
       stack_key: stackKey,
@@ -860,6 +893,7 @@ async function buildModel() {
       category_label: categoryLabel,
       needs_restack: needsRestack,
       behind_origin: behindOrigin,
+      restack_check: restackCheck,
       top_pr: userPRsRender[0]
         ? { num: userPRsRender[0].num, url: userPRsRender[0].url }
         : null,
@@ -1121,6 +1155,15 @@ async function restackStack(stackKey) {
   }
   if ((stack.behind_origin || 0) === 0) {
     return { ok: false, error: "Already up to date with origin/main." };
+  }
+  if (stack.restack_check && stack.restack_check.ok === false) {
+    return {
+      ok: false,
+      error:
+        `Predicted merge conflicts in:\n  ${stack.restack_check.conflicts.join(
+          "\n  "
+        )}\n\nResolve manually with \`gt restack\` in the worktree, then retry.`,
+    };
   }
 
   const wt = stack.worktree.path;

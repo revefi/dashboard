@@ -73,7 +73,7 @@ Sections, in order, separated by `// ----------` banner comments:
 | **gt log parsing** | `parseGtLog()`, `buildStacksFromGtLog()` — text → tree |
 | **worktrees** | `fetchWorktrees()` from `git worktree list --porcelain` |
 | **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchReviewThreadsBulk` (one aliased GraphQL query for all PRs) |
-| **trunk freshness** | `fetchOriginMain` (read-only `git fetch origin main`), `fetchStackBehind(branch)` (per-stack count of commits ahead of the stack's fork point on origin/main) |
+| **trunk freshness** | `fetchOriginMain` (read-only `git fetch origin main`), `fetchStackBehind(branch)` (per-stack count of commits ahead of the stack's fork point on origin/main), `checkRestackConflicts(branch)` (in-memory 3-way merge via `git merge-tree --write-tree`; returns clean/conflicts list/null) |
 | **restack action** | `restackStack(stackKey)` — guarded `gt restack` + `gt submit --stack -u` in the stack's worktree; `isRebaseInProgress(wt)` (rebase-state probe); `readJson(req)` (POST-body parser) |
 | **Claude CLI** | `callClaude()`, `parseJsonLoose()`, disk-cache helpers |
 | **Jira** | `jiraGet/jiraPost`, `fetchJiraTickets`, `fetchOpenJiraTickets` (direct REST only — Claude/MCP fallback was removed once REST was stable) |
@@ -98,7 +98,8 @@ Sections, in order, separated by `// ----------` banner comments:
 5. fetch review-thread counts (one bulk GraphQL query, aliased fields per PR)
 6. kick off session scoring for ALL stacks in parallel up front
    + per-stack `fetchStackBehind` (merge-base + rev-list) in parallel
-7. build PR objects per stack (await each pre-launched scoring/behind promise)
+   + per-stack `checkRestackConflicts` (merge-tree probe) in parallel
+7. build PR objects per stack (await each pre-launched scoring/behind/conflict promise)
 8. enhanceStackNamesWithClaude() — bulk Claude call for any stack
                                     whose PR-set hash isn't cached
 9. detect stale worktrees (parallel Promise.all over worktrees)
@@ -121,6 +122,7 @@ A "stack" object on the wire looks like:
   category_label: "Awaiting review",
   needs_restack: true,
   behind_origin: 9,                     // commits between leaf's fork-point on main and origin/main
+  restack_check: null | {ok: true, conflicts: []} | {ok: false, conflicts: ["path/a.ts", ...]},
   top_pr: {num, url},
   counts: {created, merged, approved, pending, changes_requested},
   upstream: null | {n, author, approved, changes_requested, review_required},
@@ -148,6 +150,7 @@ that mutates user state; it's heavily guarded:
 | `stack.upstream` is null | 400 "stack sits on upstream PRs — would skip past them" |
 | `stack.worktree.path` is set | 400 "no worktree — run `gt sync` from main checkout" |
 | `behind_origin > 0` | 400 "already up to date" |
+| `restack_check.ok !== false` (no predicted conflicts) | 400 with conflict file list |
 | `git status --porcelain` is empty in the worktree | 400 with the dirty file list |
 | `gt restack` exits 0 AND no leftover `.git/rebase-merge` / `rebase-apply` | else: `git rebase --abort` to restore branches, return error |
 | `gt submit --stack -u --no-edit --no-interactive` exits 0 | else: return partial-success error (local restack stays — never undone) |

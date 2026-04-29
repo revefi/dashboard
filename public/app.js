@@ -174,22 +174,42 @@ function renderTrunkRow(stack) {
   }
   const label = `${behind} commit${behind === 1 ? "" : "s"} behind`;
   const canRestack = !!stack.worktree?.path;
-  const tip = canRestack
-    ? `This stack's base is ${behind} commit${
-        behind === 1 ? "" : "s"
-      } behind origin/main. Click to restack onto origin/main (runs gt restack in ${stack.worktree.path}).`
-    : `This stack's base is ${behind} commit${
-        behind === 1 ? "" : "s"
-      } behind origin/main. No worktree — run gt sync from the main checkout to restack.`;
-  const action = canRestack
-    ? `<button class="trunk-restack-btn" data-restack-stack="${esc(
-        stack.stack_key
-      )}" title="${esc(tip)}">↻ Restack</button>`
-    : "";
+  const check = stack.restack_check; // {ok, conflicts} | null
+  const hasConflicts = check && check.ok === false;
+  const isClean = check && check.ok === true;
+
+  // Mergeability badge — sits between the "behind" pill and the action button.
+  let mergeBadge = "";
+  if (hasConflicts) {
+    const files = check.conflicts;
+    const preview = files.slice(0, 3).join(", ") + (files.length > 3 ? `, +${files.length - 3} more` : "");
+    const tip = `Predicted merge conflicts. gt restack will fail.\n\nConflicting files:\n  ${files.join(
+      "\n  "
+    )}\n\nResolve manually: cd into the worktree and run \`gt restack\`.`;
+    mergeBadge = `<span class="trunk-conflicts" title="${esc(
+      tip
+    )}">✗ conflicts: ${esc(preview)}</span>`;
+  } else if (isClean) {
+    mergeBadge = `<span class="trunk-mergeable" title="In-memory 3-way merge against origin/main produced no conflicts.">✓ mergeable</span>`;
+  }
+
+  // Action button — disabled when conflicts predicted, hidden when no worktree.
+  let action = "";
+  if (canRestack) {
+    const btnTip = hasConflicts
+      ? "Restack disabled — merge conflicts predicted. Resolve manually first."
+      : `Click to restack onto origin/main (runs gt restack + gt submit --stack -u in ${stack.worktree.path}).`;
+    const disabledAttr = hasConflicts ? "disabled" : "";
+    action = `<button class="trunk-restack-btn" data-restack-stack="${esc(
+      stack.stack_key
+    )}" ${disabledAttr} title="${esc(btnTip)}">↻ Restack</button>`;
+  }
+
   return `<div class="stack-row trunk">
     <span class="stack-link" style="cursor:default">
       main (trunk)
-      <span class="trunk-behind" title="${esc(tip)}">⚠ ${esc(label)}</span>
+      <span class="trunk-behind">⚠ ${esc(label)}</span>
+      ${mergeBadge}
       ${action}
     </span>
   </div>`;
