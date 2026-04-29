@@ -123,6 +123,9 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
 - Edit-mode shortcuts: `Cmd/Ctrl+B`, `Cmd/Ctrl+I`, `Cmd/Ctrl+K` wrap the
   selection.
 - Notepad persists at `dashboard.notepad` in localStorage.
+- **`📓 Hide notepad` toggle** in the sticky header reclaims the third column
+  for the main content when you need more horizontal space (e.g. wide tables
+  in remarks). Persists across reloads.
 
 ### Other
 - **Jira chips** on each stack — clickable "REV-XXXX — Title" pills.

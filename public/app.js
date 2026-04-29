@@ -1203,6 +1203,19 @@ function updateCollapseAllLabel() {
   btn.textContent = anyExpanded ? "⊟ Collapse all" : "⊞ Expand all";
 }
 
+const NOTEPAD_HIDDEN_KEY = "dashboard.notepad_hidden";
+function applyNotepadVisibility() {
+  const hidden = localStorage.getItem(NOTEPAD_HIDDEN_KEY) === "1";
+  document.querySelector(".layout")?.classList.toggle("notepad-hidden", hidden);
+  const btn = $("#toggle-notepad-btn");
+  if (btn) btn.textContent = hidden ? "📓 Show notepad" : "📓 Hide notepad";
+}
+function toggleNotepad() {
+  const cur = localStorage.getItem(NOTEPAD_HIDDEN_KEY) === "1";
+  localStorage.setItem(NOTEPAD_HIDDEN_KEY, cur ? "0" : "1");
+  applyNotepadVisibility();
+}
+
 // Keep `--sticky-top` in sync with the actual header height so the sidebar /
 // notepad always sit just below the sticky header, even when buttons wrap to a
 // second line on narrower windows.
@@ -1240,6 +1253,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#refresh-intelligent-btn").addEventListener("click", intelligentRefresh);
   $("#recs-refresh-btn").addEventListener("click", () => fetchRecs(true));
   $("#collapse-all-btn").addEventListener("click", toggleAllStacks);
+  $("#toggle-notepad-btn").addEventListener("click", toggleNotepad);
+  applyNotepadVisibility();
   // Per-card toggle listeners are wired in wireDelegates() (toggle doesn't bubble).
   setupAutoRefresh();
   updateFreshness(); // seed intel-freshness label from localStorage

@@ -67,6 +67,12 @@ body {
   gap: 40px;
   margin-top: 8px;
 }
+.layout.notepad-hidden {
+  grid-template-columns: 200px minmax(0, 1fr);
+}
+.layout.notepad-hidden .notepad {
+  display: none;
+}
 .sidebar {
   position: sticky;
   top: var(--sticky-top, 96px);

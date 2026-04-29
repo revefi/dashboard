@@ -306,6 +306,7 @@ All under the `dashboard.*` namespace:
 | `dashboard.working.YYYY-MM-DD.<key>` | Per-day "working today" toggle |
 | `dashboard.lastIntelligentTs` | ms-since-epoch of last 🧠 click |
 | `dashboard.sprint_filter` | "current" / "all" / "none" / `<sprintId>` |
+| `dashboard.notepad_hidden` | "1" if the right-side notepad column is hidden |
 
 ## Adding features
 
