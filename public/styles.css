@@ -73,6 +73,24 @@ body {
 .layout.notepad-hidden .notepad {
   display: none;
 }
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  border-radius: 50%;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: help;
+  vertical-align: 1px;
+  transition: color 0.15s, background 0.15s;
+}
+.help-icon:hover {
+  color: var(--primary);
+  background: var(--code-bg);
+}
 .sidebar {
   position: sticky;
   top: var(--sticky-top, 96px);

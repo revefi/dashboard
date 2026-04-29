@@ -96,6 +96,10 @@
           <section id="untouched-section" style="display: none">
             <h2>
               Untouched Jira
+              <span
+                class="help-icon"
+                title="Jira tickets assigned to you that aren't yet attached to any open PR stack. Your 'things to start next' queue."
+              >ⓘ</span>
               <span class="section-controls" id="sprint-filter-wrap"></span>
             </h2>
             <table class="jira">
@@ -107,8 +111,8 @@
                   <th>Title</th>
                   <th>Sprint</th>
                   <th>Updated</th>
-                  <th title="Working on it today">Today</th>
-                  <th>Remarks</th>
+                  <th title="Per-day toggle for what you're actively working on. State is scoped to today's date — the checkbox resets each day.">Today</th>
+                  <th title="Notes you write here automatically migrate to a stack's Remarks once you open a PR stack tagged with this Jira key — annotated with '↳ from REV-XXXX'. Markdown supported.">Remarks</th>
                 </tr>
               </thead>
               <tbody id="untouched-rows"></tbody>
@@ -116,13 +120,23 @@
           </section>
 
           <section id="stale-section" style="display: none">
-            <h2>Stale worktrees — safe to delete</h2>
+            <h2>
+              Stale worktrees — safe to delete
+              <span
+                class="help-icon"
+                title="Worktrees whose branch was merged, closed, or no longer has unique commits vs main. Use the copy button to remove them locally."
+              >ⓘ</span>
+            </h2>
             <div class="stale-worktrees" id="stale-list"></div>
           </section>
 
           <section id="recs-section">
             <h2 class="recs-h">
               Recommendations
+              <span
+                class="help-icon"
+                title="Claude-generated next-action suggestions based on your stack state, review comments, and recent activity. Persists across refreshes — click ⟳ Generate to regenerate (uses Claude tokens)."
+              >ⓘ</span>
               <span class="recs-meta muted" id="recs-meta"></span>
               <button
                 class="refresh-btn recs-refresh-btn"
@@ -145,7 +159,13 @@
 
         <aside class="notepad" id="notepad">
           <div class="notepad-header">
-            <span>📓 Notepad</span>
+            <span class="notepad-title">
+              📓 Notepad
+              <span
+                class="help-icon"
+                title="Local-only scratchpad. Saved to this browser's localStorage — doesn't sync to the server or to other browsers. Markdown supported (Cmd+B, Cmd+I, Cmd+K wrap selection)."
+              >ⓘ</span>
+            </span>
             <span class="notepad-saved" id="notepad-saved">saved</span>
           </div>
           <div class="notepad-body">

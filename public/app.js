@@ -51,14 +51,14 @@ function toggleCompleted(stackKey) {
 function renderSummary(meta) {
   const t = meta.totals;
   const parts = [
-    `<div class="stat"><div class="v">${t.stacks}</div><div class="l">Active stacks</div></div>`,
-    `<div class="stat"><div class="v">${t.open_prs}</div><div class="l">Open PRs</div></div>`,
-    `<div class="stat ok"><div class="v">${t.approved}</div><div class="l">Approved</div></div>`,
-    `<div class="stat pending"><div class="v">${t.pending}</div><div class="l">Pending review</div></div>`,
+    `<div class="stat" title="Number of distinct PR stacks you have open. Each stack is one connected chain of branches under the same Jira ticket(s)."><div class="v">${t.stacks}</div><div class="l">Active stacks</div></div>`,
+    `<div class="stat" title="Total open PRs you authored across all stacks."><div class="v">${t.open_prs}</div><div class="l">Open PRs</div></div>`,
+    `<div class="stat ok" title="PRs whose review state is APPROVED."><div class="v">${t.approved}</div><div class="l">Approved</div></div>`,
+    `<div class="stat pending" title="PRs that haven't been approved yet and don't have changes requested."><div class="v">${t.pending}</div><div class="l">Pending review</div></div>`,
   ];
   if (t.changes_requested > 0) {
     parts.push(
-      `<div class="stat danger"><div class="v">${t.changes_requested}</div><div class="l">Changes requested</div></div>`
+      `<div class="stat danger" title="PRs where a reviewer requested changes. Address these before re-requesting review."><div class="v">${t.changes_requested}</div><div class="l">Changes requested</div></div>`
     );
   }
   $("#summary").innerHTML = parts.join("");
@@ -200,9 +200,11 @@ function renderResumeBtn(resume) {
   const cmd = resume.in_worktree
     ? `(cd .claude/worktrees/${resume.worktree_name} && claude --resume ${resume.sid})`
     : `claude --resume ${resume.sid}`;
-  return `<span class="copy-cmd" data-cmd="${esc(cmd)}" data-copy>💻 ${esc(
-    cmd
-  )} <span class="cp">copy</span></span>`;
+  const tip =
+    "Resumes the most relevant Claude session for this stack. Picked by scoring all your session logs on mentions of this stack's PR numbers, branch names, Jira keys, and worktree name.";
+  return `<span class="copy-cmd" data-cmd="${esc(cmd)}" data-copy title="${esc(
+    tip
+  )}">💻 ${esc(cmd)} <span class="cp">copy</span></span>`;
 }
 
 function renderTrunkRow(stack) {
@@ -283,11 +285,21 @@ function renderStackCard(stack, isMerged, idx) {
     .filter(Boolean)
     .join("");
 
+  const categoryTooltips = {
+    human_review:
+      "At least one open human review comment to address. Top priority — usually means a reviewer left feedback you haven't replied to yet.",
+    ready:
+      "All your PRs are approved and there are no upstream blockers. Safe to merge.",
+    blocked_upstream:
+      "Your PRs are approved, but the stack sits on top of upstream PRs (by other authors) that aren't merged yet. Wait for those to land first.",
+    awaiting_review:
+      "At least one PR in the stack hasn't been reviewed/approved yet. Nothing actionable on your side — just waiting.",
+  };
   const pillCategory = completed
-    ? '<span class="pill merged">Merged</span>'
-    : `<span class="pill ${stack.category}">${esc(
-        stack.category_label
-      )}</span>`;
+    ? '<span class="pill merged" title="You marked this stack complete. Use the ↩ Restore button to move it back to the active list.">Merged</span>'
+    : `<span class="pill ${stack.category}" title="${esc(
+        categoryTooltips[stack.category] || ""
+      )}">${esc(stack.category_label)}</span>`;
   const pillRestack = stack.needs_restack
     ? '<span class="pill warn">⚠ Needs restack</span>'
     : "";
@@ -303,10 +315,10 @@ function renderStackCard(stack, isMerged, idx) {
   const completeBtn = completed
     ? `<button class="btn restore" data-action="restore" data-key="${esc(
         stack.stack_key
-      )}">↩ Restore to active</button>`
+      )}" title="Move this stack back to the Active list.">↩ Restore to active</button>`
     : `<button class="btn complete" data-action="complete" data-key="${esc(
         stack.stack_key
-      )}">✓ Mark complete</button>`;
+      )}" title="Move this stack to the Merged section. Useful once everything is deployed or you want it out of your daily view. Restorable later.">✓ Mark complete</button>`;
 
   const anchorId = `stack-${completed ? "merged" : "active"}-${esc(
     stack.stack_key
