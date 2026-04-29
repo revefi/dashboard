@@ -855,6 +855,7 @@ async function buildModel() {
       return {
         num: u.pr.number,
         url: `https://app.graphite.com/github/pr/revefi/rcode/${u.pr.number}`,
+        branch: u.branch,
         title: t.title,
         jira_tag: t.jira_tag,
         part_tag: t.part_tag,

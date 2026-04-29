@@ -813,6 +813,33 @@ h2 .muted {
   border-color: var(--muted);
   background: var(--code-bg);
 }
+.pr-copy-branch {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pr-copy-branch:hover {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--code-bg);
+}
+.pr-copy-branch.copied {
+  color: var(--success);
+  border-color: var(--success);
+  background: var(--success-bg);
+}
 .stack-checks {
   font-size: 11px;
   padding: 2px 8px;

@@ -119,6 +119,13 @@ function renderPrRow(pr, opts = {}) {
         <span class="stack-pr-title" title="${esc(pr.title)}">${esc(pr.title)}</span>
         ${author}
       </a>
+      ${
+        pr.branch
+          ? `<button class="pr-copy-branch" data-copy data-cmd="${esc(
+              pr.branch
+            )}" title="Copy branch name: ${esc(pr.branch)}" aria-label="Copy branch name">⎘</button>`
+          : ""
+      }
       ${comments}
       ${checksChip}
       ${statusPill}
@@ -766,8 +773,8 @@ function wireDelegates() {
     }
   });
 
-  // Copy buttons. Stop propagation so clicks don't toggle the parent <details>
-  // when this button lives inside a <summary>.
+  // Copy buttons. Stop propagation so clicks don't toggle the parent card
+  // when this button lives inside the card summary.
   $$("[data-copy]").forEach((el) => {
     if (el._copyWired) return;
     el._copyWired = true;
@@ -777,14 +784,24 @@ function wireDelegates() {
       const cmd = el.dataset.cmd;
       navigator.clipboard.writeText(cmd).then(() => {
         const cp = el.querySelector(".cp");
-        if (!cp) return;
-        const orig = cp.textContent;
-        cp.textContent = "copied!";
-        cp.style.color = "var(--success)";
-        setTimeout(() => {
-          cp.textContent = orig;
-          cp.style.color = "";
-        }, 1200);
+        if (cp) {
+          const orig = cp.textContent;
+          cp.textContent = "copied!";
+          cp.style.color = "var(--success)";
+          setTimeout(() => {
+            cp.textContent = orig;
+            cp.style.color = "";
+          }, 1200);
+        } else {
+          // Icon-only buttons: brief class + glyph swap for feedback.
+          const orig = el.textContent;
+          el.classList.add("copied");
+          el.textContent = "✓";
+          setTimeout(() => {
+            el.classList.remove("copied");
+            el.textContent = orig;
+          }, 1000);
+        }
       });
     });
   });

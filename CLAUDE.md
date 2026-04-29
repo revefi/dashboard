@@ -134,7 +134,7 @@ A "stack" object on the wire looks like:
 }
 
 Pr = {
-  num, url, title, jira_tag, part_tag,
+  num, url, branch, title, jira_tag, part_tag,
   is_draft, decision, status_label, status_class,
   human_comments, bot_comments, updated_label, needs_restack,
   checks: null | { state, failing: [name], running, total }, // null on drafts
