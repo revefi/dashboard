@@ -198,8 +198,8 @@ function renderUpstreamPRs(stack) {
 function renderResumeBtn(resume) {
   if (!resume) return "";
   const cmd = resume.in_worktree
-    ? `(cd .claude/worktrees/${resume.worktree_name} && cldr ${resume.sid})`
-    : `cldr ${resume.sid}`;
+    ? `(cd .claude/worktrees/${resume.worktree_name} && claude --resume ${resume.sid})`
+    : `claude --resume ${resume.sid}`;
   return `<span class="copy-cmd" data-cmd="${esc(cmd)}" data-copy>💻 ${esc(
     cmd
   )} <span class="cp">copy</span></span>`;

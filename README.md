@@ -109,7 +109,7 @@ comments → ready to merge → blocked → awaiting review).
 - **Always visible** even when collapsed: the index `#N`, name, top PR link,
   worktree, Jira chips, status pill, counts (created / approved / pending /
   changes-requested), total comment count, the ✓ Mark complete button,
-  💻 `cldr <session>` resume copy, and 📝 markdown Remarks.
+  💻 `claude --resume <session>` copy, and 📝 markdown Remarks.
 - **Per-PR CI rollup** in the expanded list: green `✓ checks` when all pass,
   red `✗ N failing` (with the failing check names in the tooltip), or amber
   `● running` while jobs are in progress. Suppressed for drafts.
@@ -174,8 +174,8 @@ stale each side is.
 - **Sidebar jump nav** — click any section or stack name to scroll into view
   (auto-expands the target card).
 - **Stale worktree detection** with `git worktree remove` copy commands.
-- **Resume session** — `cldr <session-id>` (or `cd worktree && cldr` for
-  worktree-based sessions).
+- **Resume session** — copies `claude --resume <session-id>` (or
+  `cd worktree && claude --resume` for worktree-based sessions).
 
 ---
 
