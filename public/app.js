@@ -678,7 +678,7 @@ function rebuildSidebar(data) {
       children: [],
     });
   }
-  sections.push({ id: "recs-section", label: "Recommendations", children: [] });
+  sections.push({ id: "recs-section", label: "Action items", children: [] });
 
   const html = sections
     .map((sec) => {
@@ -1052,7 +1052,7 @@ function renderRecs(recs) {
   list.classList.remove("loading");
   if (!recs || !recs.html) {
     list.innerHTML =
-      '<li class="empty muted">No recommendations yet — click <strong>⟳ Generate</strong> to ask Claude.</li>';
+      '<li class="empty muted">No action items yet — click <strong>⟳ Generate</strong> to ask Claude.</li>';
     meta.textContent = "";
     return;
   }
@@ -1074,7 +1074,7 @@ async function fetchRecs(force = false) {
   if (force) {
     list.classList.add("loading");
     list.innerHTML =
-      '<li class="empty muted">Generating recommendations… this can take 10–30s.</li>';
+      '<li class="empty muted">Generating action items… this can take 10–30s.</li>';
   }
   try {
     const url = force

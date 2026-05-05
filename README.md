@@ -152,7 +152,7 @@ Tickets assigned to you that aren't attached to any open stack — the queue of
 | --- | --- | --- |
 | **↻ Refresh** / Auto (10m) | gh, gt, git, Jira REST | no |
 | **🧠 Intelligent** | All of the above + wipes stack-name cache + regenerates recommendations | yes |
-| **⟳ Generate** in the Recs section | Just recommendations | yes |
+| **⟳ Generate** in the Action items section | Just the action items | yes |
 
 The two timestamps in the header (`· Ns ago`, `· intel Nm ago`) tell you how
 stale each side is.
@@ -194,7 +194,7 @@ the main column scrolls.
 │  · stack │   · merged stacks                       │    pad      │
 │    list  │   · untouched Jira (sprint-filtered)    │             │
 │          │   · stale worktrees                     │             │
-│          │   · recommendations                     │             │
+│          │   · action items                        │             │
 └──────────┴─────────────────────────────────────────┴─────────────┘
 ```
 

@@ -186,7 +186,7 @@ is fast enough (~50ms per ticket, <200ms for the bulk search) that every plain
 | --- | --- | --- |
 | ↻ Refresh / Auto (10m) | gh, gt, git, Jira REST | none (uses cached stack-names + recs) |
 | 🧠 Intelligent | All of the above + wipes stack-names cache + regenerates recommendations | yes (stack names + recs) |
-| ⟳ Generate (in Recs section) | Just recommendations | yes (recs only) |
+| ⟳ Generate (in Action items section) | Just the action items | yes (recs only) |
 
 ## Frontend (`public/`)
 
