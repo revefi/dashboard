@@ -5,7 +5,17 @@ const REMARKS_KEY_PREFIX = "dashboard.remarks.stack.";
 const JIRA_REMARKS_PREFIX = "dashboard.remarks.jira.";
 const WORKING_KEY_PREFIX = "dashboard.working.";
 const STACK_NAME_OVERRIDE_PREFIX = "dashboard.stack_name_override.";
-const AUTO_REFRESH_MS = 600_000; // 10 minutes
+const AUTO_REFRESH_INTERVAL_KEY = "dashboard.auto_refresh_ms";
+const DEFAULT_AUTO_REFRESH_MS = 600_000; // 10 minutes
+function getAutoRefreshMs() {
+  const stored = parseInt(
+    localStorage.getItem(AUTO_REFRESH_INTERVAL_KEY) || "",
+    10
+  );
+  return Number.isFinite(stored) && stored > 0
+    ? stored
+    : DEFAULT_AUTO_REFRESH_MS;
+}
 
 function getStackNameOverride(stackKey) {
   return localStorage.getItem(STACK_NAME_OVERRIDE_PREFIX + stackKey);
@@ -1200,17 +1210,47 @@ function updateFreshness() {
 
 function setupAutoRefresh() {
   const cb = $("#auto-refresh-cb");
+  const sel = $("#auto-refresh-interval");
+
+  // Restore saved interval, then keep localStorage in sync with the select.
+  sel.value = String(getAutoRefreshMs());
+  sel.addEventListener("change", () => {
+    localStorage.setItem(AUTO_REFRESH_INTERVAL_KEY, sel.value);
+    schedule();
+  });
+  cb.addEventListener("change", schedule);
+
+  // Self-rescheduling tick. setInterval is unreliable in background tabs
+  // (browsers throttle to >=1m), so each tick re-arms a setTimeout. The
+  // visibilitychange listener below covers the throttled case by firing
+  // immediately when the tab regains focus.
   function tick() {
     if (cb.checked && document.visibilityState === "visible") {
       // Auto-refresh ONLY pulls /api/data — never regenerates Claude recommendations.
-      fetchData(false);
+      fetchData(false).finally(schedule);
+    } else {
+      // Not running this tick (auto off, or tab hidden) — re-arm anyway so
+      // we resume on the next interval boundary if conditions change.
+      schedule();
     }
   }
-  cb.addEventListener("change", () => {
-    clearInterval(autoRefreshTimer);
-    if (cb.checked) autoRefreshTimer = setInterval(tick, AUTO_REFRESH_MS);
+  function schedule() {
+    if (autoRefreshTimer) clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+    if (!cb.checked) return;
+    autoRefreshTimer = setTimeout(tick, getAutoRefreshMs());
+  }
+
+  // When the tab becomes visible again, fire immediately if the configured
+  // interval has elapsed since the last successful refresh. Background-throttled
+  // setTimeouts may otherwise wait minutes before catching up.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" || !cb.checked) return;
+    const since = Date.now() - (lastFetchTs || 0);
+    if (since >= getAutoRefreshMs()) fetchData(false).finally(schedule);
   });
-  if (cb.checked) autoRefreshTimer = setInterval(tick, AUTO_REFRESH_MS);
+
+  schedule();
   setInterval(updateFreshness, 5000);
 }
 

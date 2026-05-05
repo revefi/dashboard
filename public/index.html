@@ -44,7 +44,13 @@
               title="Auto-refresh every 10 minutes (data only, no Claude)"
             >
               <input type="checkbox" id="auto-refresh-cb" checked />
-              <span>Auto (10m)</span>
+              <span>Auto</span>
+              <select id="auto-refresh-interval" aria-label="Auto-refresh interval">
+                <option value="60000">1 min</option>
+                <option value="300000">5 min</option>
+                <option value="600000" selected>10 min</option>
+                <option value="1800000">30 min</option>
+              </select>
             </label>
             <span
               class="freshness"
