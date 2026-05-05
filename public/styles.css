@@ -844,6 +844,11 @@ h2 .muted {
   border-color: var(--muted);
   background: var(--code-bg);
 }
+.stack-status.local {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: rgba(217, 119, 6, 0.08);
+}
 .pr-copy-branch {
   flex-shrink: 0;
   width: 26px;
@@ -1090,9 +1095,6 @@ table.jira td a.jira-title:hover {
   color: var(--primary);
   text-decoration: underline;
 }
-table.jira tr.working td {
-  background: var(--success-bg);
-}
 .type-badge {
   font-size: 11px;
   padding: 2px 8px;
@@ -1106,44 +1108,6 @@ table.jira tr.working td {
 .type-badge.task {
   background: var(--info-bg);
   color: var(--info);
-}
-.toggle {
-  position: relative;
-  display: inline-block;
-  width: 36px;
-  height: 20px;
-  vertical-align: middle;
-}
-.toggle input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.toggle .slider {
-  position: absolute;
-  cursor: pointer;
-  inset: 0;
-  background: var(--border);
-  border-radius: 999px;
-  transition: 0.15s;
-}
-.toggle .slider::before {
-  content: "";
-  position: absolute;
-  height: 14px;
-  width: 14px;
-  left: 3px;
-  top: 3px;
-  background: white;
-  border-radius: 50%;
-  transition: 0.15s;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-}
-.toggle input:checked + .slider {
-  background: var(--success);
-}
-.toggle input:checked + .slider::before {
-  transform: translateX(16px);
 }
 .remarks {
   min-width: 200px;
@@ -1356,6 +1320,99 @@ table.jira td.sprint-cell {
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+table.jira td.stack-cell {
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.jira td.stack-cell.muted {
+  color: var(--muted);
+}
+table.jira td.state-cell {
+  white-space: nowrap;
+}
+
+/* State pills — coloured by Jira's statusCategory key. Click to open menu. */
+.state-pill {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: var(--code-bg);
+  color: var(--text);
+  white-space: nowrap;
+}
+.state-pill:hover:not(:disabled) {
+  filter: brightness(1.08);
+  border-color: currentColor;
+}
+.state-pill:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.state-pill.cat-new {
+  color: var(--muted);
+  background: var(--code-bg);
+}
+.state-pill.cat-indeterminate {
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+.state-pill.cat-done {
+  color: var(--success);
+  background: rgba(5, 150, 105, 0.1);
+  border-color: rgba(5, 150, 105, 0.4);
+}
+
+/* Floating popover anchored next to the clicked state pill. */
+.state-menu {
+  position: absolute;
+  z-index: 100;
+  min-width: 180px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.25);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.state-menu-head {
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.state-menu-item {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.state-menu-item:hover {
+  background: var(--code-bg);
+  border-color: var(--border);
+}
+.state-menu-item.cat-indeterminate {
+  color: var(--primary);
+}
+.state-menu-item.cat-done {
+  color: var(--success);
 }
 table.jira td.sprint-cell .sprint-active {
   color: var(--success);

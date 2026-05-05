@@ -505,7 +505,7 @@ async function jiraGet(pathStr) {
   return res.json();
 }
 
-async function jiraPost(pathStr, body) {
+async function jiraPost(pathStr, body, opts = {}) {
   if (!jiraConfigured()) return null;
   const auth = Buffer.from(
     `${process.env.ATLASSIAN_EMAIL}:${process.env.ATLASSIAN_API_TOKEN}`
@@ -523,6 +523,9 @@ async function jiraPost(pathStr, body) {
     const text = await res.text().catch(() => "");
     throw new Error(`Jira ${pathStr}: ${res.status} ${text.slice(0, 200)}`);
   }
+  // Some Jira POSTs (transitions) return 204 No Content; opts.expectEmpty
+  // skips the JSON parse for those.
+  if (opts.expectEmpty || res.status === 204) return null;
   return res.json();
 }
 
@@ -605,6 +608,11 @@ async function fetchOpenJiraTickets() {
       summary: i.fields.summary,
       type: i.fields.issuetype?.name || "Task",
       status: i.fields.status?.name || "",
+      // Jira's three top-level status buckets — used for sort + pill colour:
+      //   "new" (To Do/Backlog), "indeterminate" (In Progress/In Review),
+      //   "done" (Done/Closed). Tickets in `done` shouldn't be in this list
+      //   anyway because of the `statusCategory != Done` JQL filter.
+      status_category: i.fields.status?.statusCategory?.key || "new",
       priority: i.fields.priority?.name || "Medium",
       updated: i.fields.updated,
       created: i.fields.created,
@@ -614,6 +622,38 @@ async function fetchOpenJiraTickets() {
     console.warn("[jira] fetchOpenJiraTickets failed:", err.message);
     return [];
   }
+}
+
+// Fetch the valid transitions for a ticket (e.g. "Start Progress",
+// "In Review", "Done"). Each entry has `{ id, name, to_status }`. The frontend
+// uses `id` when posting back.
+async function fetchJiraTransitions(key) {
+  if (!jiraConfigured()) return [];
+  if (!/^[A-Z]+-\d+$/.test(key)) throw new Error("invalid jira key");
+  const data = await jiraGet(
+    `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`
+  );
+  if (!data || !Array.isArray(data.transitions)) return [];
+  return data.transitions.map((t) => ({
+    id: t.id,
+    name: t.name,
+    to_status: t.to?.name || t.name,
+    to_category: t.to?.statusCategory?.key || null,
+  }));
+}
+
+// Perform a transition. POST returns 204 No Content on success.
+async function performJiraTransition(key, transitionId) {
+  if (!jiraConfigured()) throw new Error("jira not configured");
+  if (!/^[A-Z]+-\d+$/.test(key)) throw new Error("invalid jira key");
+  if (!/^\d+$/.test(String(transitionId))) {
+    throw new Error("invalid transition id");
+  }
+  await jiraPost(
+    `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`,
+    { transition: { id: String(transitionId) } },
+    { expectEmpty: true }
+  );
 }
 
 // ---------- session scoring ----------
@@ -701,6 +741,30 @@ function parseTitle(title) {
   return { jira_tag: jiraTag, part_tag: partTag, title: body.trim() };
 }
 
+// For local-only branches (worktree exists, no PR yet), synthesize a PR-like
+// object from the latest commit so downstream rendering keeps working.
+async function fetchLocalBranchMeta(branch) {
+  try {
+    const stdout = await sh(
+      `git log ${branch} --format='%s%n%cI' -n1 --no-color`
+    );
+    const lines = stdout.split("\n");
+    const title = (lines[0] || "").trim();
+    const updatedAt = (lines[1] || "").trim();
+    return {
+      number: null,
+      title: title || branch,
+      isDraft: false,
+      reviewDecision: null,
+      updatedAt,
+      headRefName: branch,
+      isLocal: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function relTime(iso) {
   if (!iso) return "";
   const then = new Date(iso).getTime();
@@ -752,28 +816,49 @@ async function buildModel() {
     let inUserSegment = true;
     for (const b of chain) {
       const openPR = branchToOpenPR.get(b.branch);
-      const isUserBranch = !!openPR;
-      if (inUserSegment && isUserBranch) {
+      const merged = branchToMergedPR.get(b.branch);
+      const wt = worktreeBranchToWT.get(b.branch);
+      if (inUserSegment && openPR) {
         userBranches.push({ ...b, pr: openPR, isUser: true });
-      } else if (inUserSegment && !isUserBranch) {
-        // Could be merged user PR (in-stack history). Keep walking but switch to upstream once we hit non-user.
-        const merged = branchToMergedPR.get(b.branch);
-        if (merged) {
-          // Recently merged user PR — still user segment.
-          userBranches.push({ ...b, pr: merged, isUser: true, isMerged: true });
-        } else {
-          inUserSegment = false;
-          upstreamBranches.push(b);
-        }
+      } else if (inUserSegment && merged) {
+        // Recently merged user PR — still user segment.
+        userBranches.push({ ...b, pr: merged, isUser: true, isMerged: true });
+      } else if (inUserSegment && wt) {
+        // Local-only branch: user has a worktree but hasn't submitted a PR
+        // yet. Synthetic `pr` is filled in below from git log.
+        userBranches.push({ ...b, pr: null, isUser: true, isLocal: true });
+      } else if (inUserSegment) {
+        inUserSegment = false;
+        upstreamBranches.push(b);
       } else {
         upstreamBranches.push(b);
       }
     }
     if (userBranches.length === 0) continue;
-    if (!userBranches.some((u) => u.pr && !u.isMerged)) continue;
+    // Keep stacks with at least one open PR OR at least one local-only branch
+    // (so unsubmitted in-progress stacks still appear).
+    if (
+      !userBranches.some(
+        (u) => (u.pr && !u.isMerged) || u.isLocal
+      )
+    )
+      continue;
 
     enrichedStacks.push({ userBranches, upstreamBranches, allBranches: chain });
   }
+
+  // Fill in synthetic `pr` for local-only branches (worktree exists, no GitHub
+  // PR yet). Run all in parallel — each is one quick `git log -n1`.
+  const localBranches = enrichedStacks.flatMap((s) =>
+    s.userBranches.filter((u) => u.isLocal)
+  );
+  await Promise.all(
+    localBranches.map(async (u) => {
+      const meta = await fetchLocalBranchMeta(u.branch);
+      if (meta) u.pr = meta;
+      else u.pr = { number: null, title: u.branch, isLocal: true, isDraft: false };
+    })
+  );
 
   // Look up review decisions for upstream branches that have open PRs.
   const upstreamLookups = new Map();
@@ -800,9 +885,12 @@ async function buildModel() {
     })
   );
 
-  // Fetch review threads for all user PRs in ONE bulk GraphQL query (aliased fields).
+  // Fetch review threads for all user PRs in ONE bulk GraphQL query (aliased
+  // fields). Local-only branches have `pr.number === null` and are skipped.
   const allUserPRNums = enrichedStacks.flatMap((s) =>
-    s.userBranches.filter((u) => u.pr && !u.isMerged).map((u) => u.pr.number)
+    s.userBranches
+      .filter((u) => u.pr && !u.isMerged && u.pr.number != null)
+      .map((u) => u.pr.number)
   );
   const prSignals = await fetchPrSignalsBulk(allUserPRNums);
 
@@ -826,7 +914,9 @@ async function buildModel() {
       }
     }
     const keywords = [
-      ...userOpenPRs.map((u) => String(u.pr.number)),
+      ...userOpenPRs
+        .filter((u) => u.pr.number != null)
+        .map((u) => String(u.pr.number)),
       ...userMergedPRs.map((u) => String(u.pr.n || u.pr.number)),
       ...es.userBranches.map((u) => u.branch),
       ...jiraKeys,
@@ -865,27 +955,29 @@ async function buildModel() {
         isBottom,
         true
       );
-      const sig = prSignals.get(u.pr.number) || {
-        human: 0,
-        bot: 0,
-        checks: null,
-      };
+      const sig =
+        u.pr.number != null
+          ? prSignals.get(u.pr.number) || { human: 0, bot: 0, checks: null }
+          : { human: 0, bot: 0, checks: null };
+      const isLocal = !!u.pr.isLocal;
       return {
-        num: u.pr.number,
-        url: `https://app.graphite.com/github/pr/revefi/rcode/${u.pr.number}`,
+        num: u.pr.number, // null for local-only branches
+        url: u.pr.number
+          ? `https://app.graphite.com/github/pr/revefi/rcode/${u.pr.number}`
+          : null,
         branch: u.branch,
         title: t.title,
         jira_tag: t.jira_tag,
         part_tag: t.part_tag,
         is_draft: !!u.pr.isDraft,
+        is_local: isLocal,
         decision: u.pr.reviewDecision || "REVIEW_REQUIRED",
-        status_label: status.label,
-        status_class: status.cls,
+        status_label: isLocal ? "Local only" : status.label,
+        status_class: isLocal ? "local" : status.cls,
         human_comments: sig.human,
         bot_comments: sig.bot,
-        // Suppress check chip on drafts — CI may not run, and the review
-        // pill will already be replaced by a "Draft" chip on the frontend.
-        checks: u.pr.isDraft ? null : sig.checks,
+        // Suppress check chip on drafts and local-only branches.
+        checks: u.pr.isDraft || isLocal ? null : sig.checks,
         updated_label: relTime(u.pr.updatedAt),
         needs_restack: u.flags && u.flags.includes("needs restack"),
       };
@@ -1087,23 +1179,35 @@ async function buildModel() {
     });
   }
 
-  // Untouched Jira: tickets assigned to me, not associated with any active stack.
+  // Jira tickets assigned to me — all of them, with a `stack` reference for any
+  // ticket that's already attached to an open stack. The frontend filters this
+  // (default: "without stack"). Wire field name kept as `untouched_jira` to
+  // avoid churn — it's a misnomer now, the section title in the UI is just
+  // "Jira".
   const openJiraTickets = await fetchOpenJiraTickets();
-  const inStackKeys = new Set(allJiraKeys);
-  const untouchedJira = openJiraTickets
-    .filter((t) => !inStackKeys.has(t.key))
-    .map((t, idx) => ({
-      rank: idx + 1,
-      key: t.key,
-      url: `https://revefi.atlassian.net/browse/${t.key}`,
-      type: t.type,
-      summary: t.summary,
-      priority: t.priority,
-      updated: t.updated,
-      updated_label: relTime(t.updated),
-      note: deriveJiraNote(t),
-      sprint: t.sprint || null,
-    }));
+  const jiraKeyToStack = new Map(); // key → { stack_key, name }
+  for (const s of stacks) {
+    for (const k of s.jira_keys) {
+      if (!jiraKeyToStack.has(k)) {
+        jiraKeyToStack.set(k, { stack_key: s.stack_key, name: s.name });
+      }
+    }
+  }
+  const untouchedJira = openJiraTickets.map((t, idx) => ({
+    rank: idx + 1,
+    key: t.key,
+    url: `https://revefi.atlassian.net/browse/${t.key}`,
+    type: t.type,
+    summary: t.summary,
+    priority: t.priority,
+    updated: t.updated,
+    updated_label: relTime(t.updated),
+    note: deriveJiraNote(t),
+    sprint: t.sprint || null,
+    status: t.status,
+    status_category: t.status_category,
+    stack: jiraKeyToStack.get(t.key) || null,
+  }));
 
   // Totals.
   const allUserPRs = stacks.flatMap((s) => s.prs);
@@ -1620,6 +1724,37 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(result));
     } catch (err) {
       res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+    return;
+  }
+
+  // Jira transitions: list valid next-states for a ticket.
+  if (url.pathname === "/api/jira/transitions" && req.method === "GET") {
+    try {
+      const key = url.searchParams.get("key") || "";
+      const transitions = await fetchJiraTransitions(key);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, transitions }));
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+    return;
+  }
+
+  // Jira transitions: perform one. Body: { key, transition_id }.
+  if (url.pathname === "/api/jira/transition" && req.method === "POST") {
+    try {
+      const body = await readJson(req);
+      await performJiraTransition(body?.key, body?.transition_id);
+      // Bust the dashboard cache so the next /api/data picks up the new
+      // status from Jira instead of the 30s-stale snapshot.
+      cache.ts = 0;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: err.message }));
     }
     return;

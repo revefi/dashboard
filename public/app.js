@@ -3,7 +3,6 @@
 const COMPLETED_KEY = "dashboard.completed";
 const REMARKS_KEY_PREFIX = "dashboard.remarks.stack.";
 const JIRA_REMARKS_PREFIX = "dashboard.remarks.jira.";
-const WORKING_KEY_PREFIX = "dashboard.working.";
 const STACK_NAME_OVERRIDE_PREFIX = "dashboard.stack_name_override.";
 const AUTO_REFRESH_INTERVAL_KEY = "dashboard.auto_refresh_ms";
 const DEFAULT_AUTO_REFRESH_MS = 600_000; // 10 minutes
@@ -116,19 +115,27 @@ function renderPrRow(pr, opts = {}) {
   const checksChip = renderChecksChip(pr.checks);
   // Drafts replace the review-status pill with a single Draft chip — review
   // states like "Needs review" are misleading on drafts that aren't ready.
-  const statusPill = pr.is_draft
+  // Local-only branches (no GitHub PR yet) get their own pill.
+  const statusPill = pr.is_local
+    ? `<span class="stack-status local" title="No GitHub PR yet — branch exists locally only. Run gt submit from the worktree to push.">📦 Local only</span>`
+    : pr.is_draft
     ? `<span class="stack-status draft" title="PR is in draft — open it to mark ready for review.">📝 Draft</span>`
     : `<span class="stack-status ${cls}">${esc(pr.status_label)}</span>`;
+  // Local-only PRs have no number/url — render as a plain (non-link) row.
+  const numLabel = pr.num ? `#${pr.num}` : "—";
+  const titleSpan = `<span class="stack-pr-title" title="${esc(pr.title)}">${esc(pr.title)}</span>`;
+  const linkOpen = pr.url
+    ? `<a class="stack-link" href="${esc(pr.url)}" target="_blank" rel="noopener">`
+    : `<span class="stack-link no-pr">`;
+  const linkClose = pr.url ? `</a>` : `</span>`;
   return `
     <div class="stack-row ${cls}">
-      <a class="stack-link" href="${esc(
-        pr.url
-      )}" target="_blank" rel="noopener">
-        <span class="stack-num">#${pr.num}</span>
+      ${linkOpen}
+        <span class="stack-num">${numLabel}</span>
         ${jira}
-        <span class="stack-pr-title" title="${esc(pr.title)}">${esc(pr.title)}</span>
+        ${titleSpan}
         ${author}
-      </a>
+      ${linkClose}
       ${
         pr.branch
           ? `<button class="pr-copy-branch" data-copy data-cmd="${esc(
@@ -347,7 +354,7 @@ function renderStackCard(stack, isMerged, idx) {
             </div>
             <div class="meta-row" style="margin-top:0">
               ${
-                stack.top_pr
+                stack.top_pr && stack.top_pr.num
                   ? `<span><b>Top:</b> <a href="${esc(
                       stack.top_pr.url
                     )}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#${
@@ -450,6 +457,39 @@ function setSprintFilter(v) {
   localStorage.setItem(SPRINT_FILTER_KEY, v);
 }
 
+const STACK_FILTER_KEY = "dashboard.stack_filter";
+function getStackFilter() {
+  // Default "without_stack" preserves the original "Untouched Jira" behavior.
+  return localStorage.getItem(STACK_FILTER_KEY) || "without_stack";
+}
+function setStackFilter(v) {
+  localStorage.setItem(STACK_FILTER_KEY, v);
+}
+function applyStackFilter(list) {
+  const f = getStackFilter();
+  if (f === "all") return list;
+  if (f === "with_stack") return list.filter((t) => !!t.stack);
+  return list.filter((t) => !t.stack);
+}
+
+// Sort tickets by actionability: actively-in-flight states first, then
+// To Do/Backlog. Within a tier, newer-updated wins.
+const STATE_ORDER = {
+  "In Review": 0,
+  "In Progress": 1,
+  Blocked: 2,
+  "To Do": 3,
+  Backlog: 4,
+};
+function sortJiraList(list) {
+  return [...list].sort((a, b) => {
+    const oa = STATE_ORDER[a.status] ?? 50;
+    const ob = STATE_ORDER[b.status] ?? 50;
+    if (oa !== ob) return oa - ob;
+    return (b.updated || "").localeCompare(a.updated || "");
+  });
+}
+
 function uniqueSprintsFromTickets(list) {
   const map = new Map();
   for (const t of list) {
@@ -461,6 +501,20 @@ function uniqueSprintsFromTickets(list) {
     if (a.state === "active" && b.state !== "active") return -1;
     if (a.state !== "active" && b.state === "active") return 1;
     return (b.start_date || "").localeCompare(a.start_date || "");
+  });
+}
+
+function renderStackFilter() {
+  const wrap = $("#stack-filter-wrap");
+  if (!wrap) return;
+  const cur = getStackFilter();
+  wrap.innerHTML = `<select class="sprint-select" id="stack-select" title="Whether to show tickets that already have an active PR stack."><option value="without_stack">Without stack</option><option value="with_stack">With stack</option><option value="all">All</option></select>`;
+  const sel = $("#stack-select");
+  sel.value = cur;
+  sel.addEventListener("change", () => {
+    setStackFilter(sel.value);
+    renderUntouchedRows();
+    rebuildSidebar(currentData);
   });
 }
 
@@ -546,11 +600,13 @@ function renderSprintCell(sprint) {
 }
 
 function renderUntouchedRows() {
-  const filtered = applySprintFilter(cachedUntouchedList);
+  const filtered = sortJiraList(
+    applyStackFilter(applySprintFilter(cachedUntouchedList))
+  );
   const tbody = $("#untouched-rows");
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" style="padding:18px;color:var(--muted);font-style:italic;text-align:center">
-      No tickets in this sprint. Switch the dropdown to <strong>All sprints</strong>.
+    tbody.innerHTML = `<tr><td colspan="9" style="padding:18px;color:var(--muted);font-style:italic;text-align:center">
+      No tickets match the current filters.
     </td></tr>`;
     return;
   }
@@ -568,9 +624,10 @@ function renderUntouchedRows() {
       <td><a class="jira-title" href="${esc(
         t.url
       )}" target="_blank" rel="noopener">${esc(t.summary)}</a></td>
+      ${renderStateCell(t)}
       ${renderSprintCell(t.sprint)}
+      ${renderStackCell(t)}
       <td>${esc(t.updated_label || "")}</td>
-      <td><label class="toggle"><input type="checkbox" class="working-cb"><span class="slider"></span></label></td>
       <td><div class="remarks" data-md-key="${esc(
         JIRA_REMARKS_PREFIX + t.key
       )}"></div></td>
@@ -580,6 +637,27 @@ function renderUntouchedRows() {
   wireDelegates();
 }
 
+function renderStateCell(t) {
+  const status = t.status || "—";
+  const cat = t.status_category || "new";
+  return `<td class="state-cell"><button class="state-pill cat-${esc(
+    cat
+  )}" data-state-pill data-key="${esc(t.key)}" data-current="${esc(
+    status
+  )}" title="Click to change state">${esc(status)}</button></td>`;
+}
+
+function renderStackCell(t) {
+  if (!t.stack) return `<td class="stack-cell muted">—</td>`;
+  const anchor = `stack-active-${t.stack.stack_key}`;
+  const label = truncate(t.stack.name || t.stack.stack_key, 32);
+  return `<td class="stack-cell"><a href="#${esc(
+    anchor
+  )}" data-jump="${esc(anchor)}" title="${esc(
+    t.stack.name || t.stack.stack_key
+  )}">${esc(label)}</a></td>`;
+}
+
 function renderUntouchedJira(list, jiraConfigured) {
   const sec = $("#untouched-section");
   cachedUntouchedList = list || [];
@@ -587,10 +665,11 @@ function renderUntouchedJira(list, jiraConfigured) {
     if (jiraConfigured === false) {
       sec.style.display = "";
       $("#sprint-filter-wrap").innerHTML = "";
+      $("#stack-filter-wrap").innerHTML = "";
       $(
         "#untouched-rows"
-      ).innerHTML = `<tr><td colspan="8" style="padding:24px;color:var(--muted);font-style:italic;text-align:center">
-        Jira not configured. Add <code>ATLASSIAN_EMAIL</code> and <code>ATLASSIAN_API_TOKEN</code> to <code>.claude/dashboard/.env</code> and restart the server.
+      ).innerHTML = `<tr><td colspan="9" style="padding:24px;color:var(--muted);font-style:italic;text-align:center">
+        Jira not configured. Add <code>ATLASSIAN_EMAIL</code> and <code>ATLASSIAN_API_TOKEN</code> to <code>~/.zshrc</code> and restart the server.
       </td></tr>`;
       return;
     }
@@ -598,6 +677,7 @@ function renderUntouchedJira(list, jiraConfigured) {
     return;
   }
   sec.style.display = "";
+  renderStackFilter();
   renderSprintFilter(uniqueSprintsFromTickets(list));
   renderUntouchedRows();
 }
@@ -667,7 +747,7 @@ function rebuildSidebar(data) {
   if (data.untouched_jira && data.untouched_jira.length > 0) {
     sections.push({
       id: "untouched-section",
-      label: "Untouched Jira",
+      label: "Jira",
       children: [],
     });
   }
@@ -777,18 +857,8 @@ function wireDelegates() {
     });
   });
 
-  // Jira row remarks + working checkbox.
-  const today = new Date().toISOString().slice(0, 10);
+  // Jira row remarks.
   $$("tr.jira-row").forEach((row) => {
-    const k = row.dataset.key;
-    const cb = row.querySelector(".working-cb");
-    const wkKey = WORKING_KEY_PREFIX + today + "." + k;
-    cb.checked = localStorage.getItem(wkKey) === "1";
-    if (cb.checked) row.classList.add("working");
-    cb.addEventListener("change", () => {
-      localStorage.setItem(wkKey, cb.checked ? "1" : "0");
-      row.classList.toggle("working", cb.checked);
-    });
     const rem = row.querySelector(".remarks");
     if (rem) {
       wireMarkdownRemarks(rem, rem.dataset.mdKey, { placeholder: "Add note…" });
@@ -836,6 +906,17 @@ function wireDelegates() {
       e.preventDefault();
       e.stopPropagation();
       await handleRestackClick(el);
+    });
+  });
+
+  // State pill click → fetch valid transitions → menu → confirm → POST.
+  $$("[data-state-pill]").forEach((el) => {
+    if (el._statePillWired) return;
+    el._statePillWired = true;
+    el.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await openStateMenu(el);
     });
   });
 
@@ -1102,6 +1183,171 @@ async function fetchRecs(force = false) {
 let currentData = null;
 let lastFetchTs = 0;
 let autoRefreshTimer = null;
+
+// Open a small menu of valid Jira transitions next to the clicked pill. The
+// transition list is fetched per-click rather than cached, so we always reflect
+// the current ticket's workflow state (if a ticket has already moved to In
+// Review, the transitions returned will be the ones valid from In Review).
+async function openStateMenu(pill) {
+  closeStateMenu();
+  const key = pill.dataset.key;
+  const current = pill.dataset.current;
+  if (!key) return;
+
+  // Loading marker on the pill.
+  const origText = pill.textContent;
+  pill.disabled = true;
+  pill.textContent = "…";
+
+  let transitions = [];
+  try {
+    const res = await fetch(
+      `/api/jira/transitions?key=${encodeURIComponent(key)}`
+    );
+    const body = await res.json();
+    if (!body.ok) throw new Error(body.error || "transitions fetch failed");
+    transitions = body.transitions || [];
+  } catch (err) {
+    pill.disabled = false;
+    pill.textContent = origText;
+    window.alert(`Couldn't fetch transitions: ${err.message}`);
+    return;
+  }
+  pill.disabled = false;
+  pill.textContent = origText;
+
+  // Drop transitions that target the current state — Jira sometimes lists a
+  // self-loop and clicking it is a no-op confusion.
+  const usable = transitions.filter((t) => t.to_status !== current);
+  if (usable.length === 0) {
+    window.alert(`No transitions available from "${current}".`);
+    return;
+  }
+
+  const menu = document.createElement("div");
+  menu.className = "state-menu";
+  menu.innerHTML =
+    `<div class="state-menu-head">Move ${esc(key)} from <b>${esc(
+      current
+    )}</b> to:</div>` +
+    usable
+      .map(
+        (t) =>
+          `<button class="state-menu-item cat-${esc(
+            t.to_category || "new"
+          )}" data-transition-id="${esc(String(t.id))}" data-target="${esc(
+            t.to_status
+          )}">${esc(t.to_status)}</button>`
+      )
+      .join("");
+
+  document.body.appendChild(menu);
+  positionMenuNear(menu, pill);
+
+  for (const item of menu.querySelectorAll(".state-menu-item")) {
+    item.addEventListener("click", async () => {
+      const target = item.dataset.target;
+      const tid = item.dataset.transitionId;
+      closeStateMenu();
+      await handleStateTransition(pill, key, tid, target);
+    });
+  }
+
+  // Click-outside closes.
+  setTimeout(() => {
+    document.addEventListener("click", _stateMenuOutsideClose, {
+      capture: true,
+    });
+    document.addEventListener("keydown", _stateMenuEscClose);
+  }, 0);
+}
+
+let _activeStateMenu = null;
+function closeStateMenu() {
+  const m = document.querySelector(".state-menu");
+  if (m) m.remove();
+  document.removeEventListener("click", _stateMenuOutsideClose, {
+    capture: true,
+  });
+  document.removeEventListener("keydown", _stateMenuEscClose);
+}
+function _stateMenuOutsideClose(e) {
+  const m = document.querySelector(".state-menu");
+  if (m && !m.contains(e.target)) closeStateMenu();
+}
+function _stateMenuEscClose(e) {
+  if (e.key === "Escape") closeStateMenu();
+}
+
+function positionMenuNear(menu, anchor) {
+  const r = anchor.getBoundingClientRect();
+  // Below the pill by default; flip above if it would overflow the viewport.
+  const margin = 6;
+  let top = r.bottom + margin + window.scrollY;
+  let left = r.left + window.scrollX;
+  // Render once to measure, then adjust if it overflows.
+  menu.style.position = "absolute";
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+  const mb = menu.getBoundingClientRect();
+  if (mb.right > window.innerWidth - 8) {
+    left = Math.max(8, window.innerWidth - mb.width - 8) + window.scrollX;
+    menu.style.left = `${left}px`;
+  }
+  if (r.bottom + margin + mb.height > window.innerHeight) {
+    top = r.top - margin - mb.height + window.scrollY;
+    menu.style.top = `${top}px`;
+  }
+}
+
+async function handleStateTransition(pill, key, transitionId, targetStatus) {
+  // Optimistic update: flip the pill immediately. Revert on failure.
+  const origText = pill.textContent;
+  const origCat = [...pill.classList].find((c) => c.startsWith("cat-"));
+  pill.textContent = targetStatus;
+  pill.dataset.current = targetStatus;
+  // Best-effort coloring: indeterminate for In Progress/In Review, done for
+  // Done/Closed, else "new".
+  const newCat = /done|closed/i.test(targetStatus)
+    ? "cat-done"
+    : /progress|review/i.test(targetStatus)
+    ? "cat-indeterminate"
+    : "cat-new";
+  if (origCat) pill.classList.remove(origCat);
+  pill.classList.add(newCat);
+
+  // Update cached list so re-renders keep the new state.
+  const cached = cachedUntouchedList.find((t) => t.key === key);
+  let cachedOrig;
+  if (cached) {
+    cachedOrig = { status: cached.status, status_category: cached.status_category };
+    cached.status = targetStatus;
+    cached.status_category = newCat.replace("cat-", "");
+  }
+
+  try {
+    const res = await fetch("/api/jira/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, transition_id: transitionId }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.ok === false) {
+      throw new Error(body.error || res.statusText || "transition failed");
+    }
+  } catch (err) {
+    // Revert.
+    pill.textContent = origText;
+    pill.dataset.current = origText;
+    pill.classList.remove(newCat);
+    if (origCat) pill.classList.add(origCat);
+    if (cached && cachedOrig) {
+      cached.status = cachedOrig.status;
+      cached.status_category = cachedOrig.status_category;
+    }
+    window.alert(`Transition failed:\n\n${err.message}`);
+  }
+}
 
 async function handleRestackClick(btn) {
   const stackKey = btn.dataset.restackStack;
