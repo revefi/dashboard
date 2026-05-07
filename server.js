@@ -807,6 +807,44 @@ async function buildModel() {
   const worktreeNameSet = new Set(worktrees.map((w) => w.name));
   const worktreeBranchToWT = new Map(worktrees.map((w) => [w.branch, w]));
 
+  // Pre-detect branches that are FULLY merged into origin/main even though
+  // they don't show up in fetchRecentMergedPRs. Graphite squashes leave the
+  // GitHub PR CLOSED with mergedAt=null, so our recent-merged scan misses
+  // them. Without this check, a freshly-merged branch whose worktree still
+  // exists would be classified as "local only" and shown as an active stack.
+  // We only need to check branches that are local-only candidates: have a
+  // worktree, no open PR, and no recently-merged-PR record.
+  const localCandidateBranches = [
+    ...new Set(
+      rawStacks.flatMap((c) =>
+        c
+          .filter(
+            (b) =>
+              worktreeBranchToWT.has(b.branch) &&
+              !branchToOpenPR.has(b.branch) &&
+              !branchToMergedPR.has(b.branch)
+          )
+          .map((b) => b.branch)
+      )
+    ),
+  ];
+  const fullyMergedBranches = new Set();
+  await Promise.all(
+    localCandidateBranches.map(async (branch) => {
+      try {
+        const { stdout } = await execP(
+          `git rev-list --count ${branch} ^origin/main`,
+          { cwd: REPO, maxBuffer: 1e6 }
+        );
+        const ahead = parseInt(stdout.trim(), 10) || 0;
+        if (ahead === 0) fullyMergedBranches.add(branch);
+      } catch {
+        // git error → leave it as a candidate; partitioning will treat it
+        // as local-only and the user can still see it.
+      }
+    })
+  );
+
   // Partition each stack into user_segment (top, has user PRs) vs upstream_segment (below).
   const enrichedStacks = [];
   for (const chain of rawStacks) {
@@ -818,14 +856,17 @@ async function buildModel() {
       const openPR = branchToOpenPR.get(b.branch);
       const merged = branchToMergedPR.get(b.branch);
       const wt = worktreeBranchToWT.get(b.branch);
+      const isFullyMerged = fullyMergedBranches.has(b.branch);
       if (inUserSegment && openPR) {
         userBranches.push({ ...b, pr: openPR, isUser: true });
       } else if (inUserSegment && merged) {
         // Recently merged user PR — still user segment.
         userBranches.push({ ...b, pr: merged, isUser: true, isMerged: true });
-      } else if (inUserSegment && wt) {
+      } else if (inUserSegment && wt && !isFullyMerged) {
         // Local-only branch: user has a worktree but hasn't submitted a PR
-        // yet. Synthetic `pr` is filled in below from git log.
+        // yet. Synthetic `pr` is filled in below from git log. Branches that
+        // are fully merged into origin/main are excluded — the stale-worktree
+        // section catches them for cleanup instead.
         userBranches.push({ ...b, pr: null, isUser: true, isLocal: true });
       } else if (inUserSegment) {
         inUserSegment = false;
