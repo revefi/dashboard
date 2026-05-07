@@ -18,8 +18,11 @@ const {
 function callClaude(prompt, opts = {}) {
   return new Promise((resolve, reject) => {
     const args = ["-p", "--output-format", "text"];
+    // Default to Sonnet 4.6 — better stack-name + recommendation quality than
+    // Haiku at modest extra latency. Pass `opts.model` to override per call,
+    // or `opts.model: false` to let the CLI pick.
     if (opts.model !== false)
-      args.push("--model", opts.model || "claude-haiku-4-5");
+      args.push("--model", opts.model || "claude-sonnet-4-6");
     if (opts.allowedTools) args.push("--allowedTools", opts.allowedTools);
     const proc = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "",
