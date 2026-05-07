@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "transitions": [
+    {
+      "id": "121",
+      "name": "To Do",
+      "to_category": "new",
+      "to_status": "To Do"
+    },
+    {
+      "id": "131",
+      "name": "In Progress",
+      "to_category": "indeterminate",
+      "to_status": "In Progress"
+    },
+    {
+      "id": "141",
+      "name": "Blocked (2)",
+      "to_category": "new",
+      "to_status": "Blocked"
+    },
+    {
+      "id": "151",
+      "name": "In Review",
+      "to_category": "indeterminate",
+      "to_status": "In Review"
+    },
+    {
+      "id": "161",
+      "name": "Done",
+      "to_category": "done",
+      "to_status": "Done"
+    },
+    {
+      "id": "171",
+      "name": "Closed",
+      "to_category": "done",
+      "to_status": "Closed"
+    }
+  ]
+}

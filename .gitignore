@@ -11,3 +11,6 @@ cache/
 .idea/
 .vscode/
 node_modules/
+
+# Refactor sanity-check snapshots (working dir; baseline is tracked).
+tmp/after/
