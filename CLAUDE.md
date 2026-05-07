@@ -37,6 +37,7 @@ except via configured absolute paths in `src/server/config.js` (`REPO`,
 │   │   ├── api.js           fetchData, fetchRecs, intelligentRefresh
 │   │   ├── render.js        all render*() + render(data) + rebuildSidebar
 │   │   ├── notepad.js       markdown editor + notepad init
+│   │   ├── theme.js         Auto/Light/Dark cycle button
 │   │   ├── jira-state.js    state-pill popover + transitions
 │   │   ├── restack-action.js  restack click handler
 │   │   ├── refresh.js       auto-refresh, freshness, collapse-all
@@ -276,6 +277,7 @@ placeholders by `innerHTML = ...` after fetching `/api/data`.
 | `api.js` | `fetchData`, `fetchRecs`, `intelligentRefresh` |
 | `render.js` | every `render*()` function + `render(data)` + `rebuildSidebar(data)` |
 | `notepad.js` | `wireMarkdownRemarks`, `renderMarkdown`, `initNotepad`, `applyNotepadVisibility`, `toggleNotepad` |
+| `theme.js` | `initTheme()` — wires the header's Auto/Light/Dark cycle button. "Auto" leaves `data-theme` unset so the OS @media query drives styling; Light/Dark sets `data-theme="..."` on `<html>` and persists under `dashboard.theme`. First-paint application is done by an inline `<script>` in `index.html`'s `<head>` to avoid FOUC. |
 | `jira-state.js` | `openStateMenu`, popover positioning, `handleStateTransition` (optimistic, with revert on failure) |
 | `restack-action.js` | `handleRestackClick` — confirm dialog + POST + spinner |
 | `refresh.js` | `setupAutoRefresh` (self-rescheduling setTimeout + visibilitychange catch-up), `updateFreshness`, `toggleAllStacks`, `syncStickyTop` |
@@ -397,6 +399,7 @@ All under the `dashboard.*` namespace:
 | `dashboard.stack_filter` | `"without_stack"` / `"with_stack"` / `"all"` (Jira-table stack-presence filter) |
 | `dashboard.notepad_hidden` | `"1"` if the right-side notepad column is hidden |
 | `dashboard.auto_refresh_ms` | Selected auto-refresh interval in ms (60000/300000/600000/1800000) |
+| `dashboard.theme` | `"light"` or `"dark"` if the user picked one. Absent = follow OS via `prefers-color-scheme`. |
 
 ## Adding features
 
@@ -447,7 +450,7 @@ function setFoo(v) { localStorage.setItem(FOO_KEY, v); }
 Import from `src/server/claude.js`: `callClaude(prompt, opts)` spawns the
 `claude` CLI, pipes the prompt via stdin, returns stdout. `opts.allowedTools`
 accepts a comma-separated MCP tool name list. `opts.model` defaults to
-`claude-haiku-4-5`. Always cache the result on disk via `loadDiskCache` /
+`claude-sonnet-4-6`. Always cache the result on disk via `loadDiskCache` /
 `saveDiskCache` (from `src/server/disk-cache.js`) if the answer is expensive
 — Claude calls are 5–60s each.
 

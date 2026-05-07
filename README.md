@@ -198,6 +198,9 @@ stale each side is.
 - **Stale worktree detection** with `git worktree remove` copy commands.
 - **Resume session** — copies `claude --resume <session-id>` (or
   `cd worktree && claude --resume` for worktree-based sessions).
+- **Theme toggle** in the header cycles **Auto → Light → Dark**. "Auto"
+  follows the OS `prefers-color-scheme`; pick a side to override and
+  it's remembered (per browser).
 
 ---
 
@@ -304,6 +307,7 @@ public/app/         frontend, native ES modules — no bundler
   api.js            fetchData, fetchRecs, intelligentRefresh
   render.js         all render*() functions + render(data)
   notepad.js        markdown editor + notepad init
+  theme.js          Auto/Light/Dark cycle button
   jira-state.js     state-pill popover + transitions
   restack-action.js restack click handler
   refresh.js        auto-refresh, freshness, collapse-all
