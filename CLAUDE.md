@@ -4,20 +4,59 @@ Personal PR/stack dashboard for Revefi work. Replaces running `/daily-start`
 repeatedly throughout the day. A small Node server polls `gh`, `gt`, Jira REST,
 and Claude session files; a vanilla-JS SPA renders the result. Lives at
 `~/dashboard/`, its own private GitHub repo, not tied to any single project
-except via configured absolute paths in `server.js` (`REPO`, `SESSIONS_ROOT`).
+except via configured absolute paths in `src/server/config.js` (`REPO`,
+`SESSIONS_ROOT`).
 
 ## Files
 
 ```
 ~/dashboard/
-├── server.js                main HTTP server (zero deps, single file)
+├── server.js                4-line shim: `require("./src/server")`
+├── src/server/              backend, split by concern (CommonJS, no deps)
+│   ├── index.js             boots http.createServer + listens on PORT
+│   ├── config.js            env vars, paths, constants
+│   ├── shell.js             sh / shRetry / shWithInput
+│   ├── disk-cache.js        loadDiskCache / saveDiskCache (TTL-aware)
+│   ├── git.js               worktrees, behind, conflicts, gt-log parsing
+│   ├── gh.js                PRs + bulk GraphQL signals (review threads + CI)
+│   ├── jira.js              REST client + transitions
+│   ├── claude.js            callClaude, session scoring, stack-name gen
+│   ├── model.js             buildModel — the /api/data hot path
+│   ├── cache.js             in-memory cache + getData wrapper
+│   ├── recs.js              "Action items" Claude-backed recommendations
+│   ├── restack.js           POST /api/restack handler
+│   └── routes.js            HTTP request dispatch + serveStatic + MIME
 ├── start.sh                 launchd wrapper (sets PATH, sources zshrc creds)
 ├── public/
 │   ├── index.html           SPA shell — three-column layout
-│   ├── app.js               all client logic (vanilla JS, single file)
-│   ├── styles.css           all styling — CSS variables for light + dark
+│   ├── app/                 frontend, split by concern (native ES modules)
+│   │   ├── main.js          DOMContentLoaded wiring (entry)
+│   │   ├── store.js         shared mutable state (currentData, etc.)
+│   │   ├── storage.js       localStorage keys + getters/setters
+│   │   ├── dom.js           $, $$, esc, truncate, relAge
+│   │   ├── api.js           fetchData, fetchRecs, intelligentRefresh
+│   │   ├── render.js        all render*() + render(data) + rebuildSidebar
+│   │   ├── notepad.js       markdown editor + notepad init
+│   │   ├── jira-state.js    state-pill popover + transitions
+│   │   ├── restack-action.js  restack click handler
+│   │   ├── refresh.js       auto-refresh, freshness, collapse-all
+│   │   └── delegates.js     wireDelegates event delegation
+│   ├── styles.css           14-line @import aggregator
+│   ├── styles/              styling, split by topic
+│   │   ├── base.css         :root vars, reset, layout shell
+│   │   ├── topbar.css       header.top, refresh buttons, auto-toggle
+│   │   ├── summary.css      summary stats, h2, .muted, .error-banner
+│   │   ├── stacks.css       cards, PR rows, trunk, upstream, remarks
+│   │   ├── jira-table.css   .chips, table.jira, type-badge, remarks
+│   │   ├── recs.css         Action items panel
+│   │   ├── sidebar.css      jump-nav + scroll-margin offsets
+│   │   ├── jira-state.css   sprint filter, state pills, state menu
+│   │   └── markdown.css     .md-view + .md-editor
 │   ├── marked.min.js        markdown parser (GFM), ~40KB, served as static
 │   └── favicon.ico
+├── tools/
+│   ├── snapshot.sh          backward-compat snapshot harness for refactors
+│   └── snapshot-filter.jq   jq filter that zeroes volatile fields
 ├── cache/                   gitignored
 │   ├── recommendations.json    Claude-generated recs (manual refresh only)
 │   └── stack-names.json        Claude-named stacks, keyed by PR-set hash
@@ -29,9 +68,10 @@ except via configured absolute paths in `server.js` (`REPO`, `SESSIONS_ROOT`).
 ```
 
 There are no `node_modules` and no build step on either side — Node 22's built-in
-`http` module + `fetch` are sufficient on the server, and the frontend is plain
-HTML/CSS/JS plus the dropped-in `marked.min.js`. The `claude` CLI is shelled out
-for AI-shaped work (recommendations, stack name generation).
+`http` module + `fetch` are sufficient on the server, the frontend is plain
+HTML/CSS/JS + native ES modules, plus the dropped-in `marked.min.js`. The
+`claude` CLI is shelled out for AI-shaped work (recommendations, stack name
+generation).
 
 ## Runtime architecture
 
@@ -42,14 +82,14 @@ for AI-shaped work (recommendations, stack name generation).
                            │
                            ▼
    ┌────────────────────────────────────────────────────┐
-   │ server.js                                          │
+   │ src/server/ (CommonJS modules)                     │
    │   /api/data                ← model JSON            │
    │   /api/recommendations     ← Claude-generated <li>s│
    │   /api/restack (POST)      ← gt restack + gt submit│
    │   /api/jira/transitions    ← list valid transitions│
    │   /api/jira/transition POST ← perform a transition │
    │   /api/health              ← lightweight status    │
-   │   /  /styles.css /app.js /marked.min.js /favicon   │
+   │   /  /styles.css /app/*.js /styles/*.css /marked   │
    └─────────┬────────────────────────────────────────┬─┘
              │ shells out to                          │ writes to
              ▼                                        ▼
@@ -64,29 +104,28 @@ for AI-shaped work (recommendations, stack name generation).
 Plain refresh end-to-end takes ~8 seconds, dominated by GitHub's GraphQL
 response time and a few `gh` subprocess spawns. See "Performance notes" below.
 
-## server.js anatomy
+## `src/server/` anatomy
 
-Sections, in order, separated by `// ----------` banner comments:
+One module per concern. `index.js` boots the HTTP server; everything else
+exports a small surface that other modules import. `server.js` at the repo
+root is a 4-line shim that just `require("./src/server")` so launchd configs
+keep working without a path change.
 
-| Section | What it does |
+| Module | What it owns |
 | --- | --- |
-| **constants** | `REPO` (from `process.env.WORKSPACE_PATH` — required), `SESSIONS_ROOT` (`$HOME/.claude/projects`), `MAIN_SESSIONS_DIR` (derived via `encodeProjectDir(REPO)`), `PORT`, `CACHE_DIR`, file paths |
-| **shell helpers** | `sh()`, `shRetry()`, `shWithInput()` — promisified `exec` / `spawn` with retry / stdin pipe |
-| **gt log parsing** | `parseGtLog()`, `buildStacksFromGtLog()` — text → tree |
-| **worktrees** | `fetchWorktrees()` from `git worktree list --porcelain` |
-| **PRs** | `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchPrSignalsBulk` (one aliased GraphQL query that returns review-thread counts AND CI `statusCheckRollup` for every user PR), `summarizeChecks` (rollup → `{state, failing[], running, total}`) |
-| **trunk freshness** | `fetchOriginMain` (read-only `git fetch origin main`), `fetchStackBehind(branch)` (per-stack count of commits ahead of the stack's fork point on origin/main), `checkRestackConflicts(branch)` (in-memory 3-way merge via `git merge-tree --write-tree`; returns clean/conflicts list/null) |
-| **restack action** | `restackStack(stackKey)` — guarded `gt restack` + `gt submit --stack -u` in the stack's worktree; `isRebaseInProgress(wt)` (rebase-state probe); `readJson(req)` (POST-body parser) |
-| **Claude CLI** | `callClaude()`, `parseJsonLoose()`, disk-cache helpers |
-| **Jira** | `jiraGet/jiraPost` (POST supports `expectEmpty: true` for the 204 no-body transitions endpoint), `fetchJiraTickets`, `fetchOpenJiraTickets`, `fetchJiraTransitions(key)`, `performJiraTransition(key, transitionId)` (direct REST only) |
-| **local-only branches** | `fetchLocalBranchMeta(branch)` synthesizes a PR-shaped object from `git log -1 --format=%s%n%cI` so worktree branches without a GitHub PR still render on the dashboard |
-| **session scoring** | `scoreSessionsForStack()` greps Claude session JSONLs (parallel `Promise.all`) |
-| **title parsing** | `parseTitle()` strips `[REV-XXXX][Part N]` prefix |
-| **model assembly** | `buildModel()` — the main pipeline |
-| **stack-name generation** | `enhanceStackNamesWithClaude()` (Claude bulk call, cached) |
-| **caching** | `getData()`, `clearClaudeBackedCaches()` |
-| **recommendations** | `getRecommendations()`, prompt construction, disk cache |
-| **HTTP** | `serveStatic()`, `MIME` table, route dispatch |
+| `config.js` | `REPO` (from `process.env.WORKSPACE_PATH` — required), `SESSIONS_ROOT` (`$HOME/.claude/projects`), `MAIN_SESSIONS_DIR` (derived via `encodeProjectDir(REPO)`), `PORT`, `CACHE_DIR`, `STATIC_DIR`, all file paths and constants |
+| `shell.js` | `sh()`, `shRetry()`, `shWithInput()` — promisified `exec` / `spawn` with retry / stdin pipe |
+| `disk-cache.js` | `loadDiskCache(file)` / `saveDiskCache(file, data, ttlMs)` — TTL-aware JSON-on-disk helpers |
+| `git.js` | `parseGtLog`, `buildStacksFromGtLog`, `fetchWorktrees`, `fetchOriginMain`, `fetchStackBehind` (per-stack `behind origin/main`), `checkRestackConflicts` (in-memory 3-way merge via `git merge-tree --write-tree`), `fetchLocalBranchMeta` (synthesizes a PR-shaped object from `git log -1` for branches without a PR), `isRebaseInProgress` |
+| `gh.js` | `getLogin`, `fetchOpenPRs`, `fetchRecentMergedPRs`, `fetchAnyPR`, `fetchPRMeta`, `fetchPrSignalsBulk` (one aliased GraphQL query returning review-thread counts AND CI `statusCheckRollup` for every user PR), `summarizeChecks` (rollup → `{state, failing[], running, total}`) |
+| `jira.js` | `jiraGet/jiraPost` (POST supports `expectEmpty: true` for 204 no-body endpoints), `fetchJiraTickets`, `fetchOpenJiraTickets`, `fetchJiraTransitions(key)`, `performJiraTransition(key, transitionId)`, `parseActiveSprint`, `deriveJiraNote`, `jiraConfigured` |
+| `claude.js` | `callClaude()`, `parseJsonLoose()`, `scoreSessionsForStack()` (greps Claude session JSONLs in parallel), `enhanceStackNamesWithClaude()` (bulk Claude call, disk-cached by PR-set hash) |
+| `model.js` | `buildModel()` — the `/api/data` hot path, plus the small `parseTitle/relTime/deriveStatus` helpers it uses |
+| `cache.js` | in-memory `cache = {ts, data, building}` + `getData(forceRefresh, opts)` wrapper + `clearClaudeBackedCaches()`. Other modules mutate `cache.ts = 0` to invalidate (works because they share the object reference) |
+| `recs.js` | `getRecommendations()`, prompt construction, disk cache, `getRecsCacheState()` |
+| `restack.js` | `restackStack(stackKey)` — guarded `gt restack` + `gt submit --stack -u` in the stack's worktree (POST `/api/restack` body) |
+| `routes.js` | `handle(req, res)` request dispatcher + `serveStatic` + `MIME` + `readJson(req)` |
+| `index.js` | `http.createServer(handle)` + `listen(PORT)` + boot logs |
 
 ### `buildModel()` pipeline (the hot path)
 
@@ -221,8 +260,26 @@ plain ↻ Refresh fetches them fresh. `POST /api/jira/transition` busts
 
 `index.html` is a static SPA shell with named placeholder elements
 (`#summary`, `#active-stacks`, `#untouched-rows`, `#recs-list`,
-`#notepad-content`, etc.). `app.js` populates them by `innerHTML = ...` after
-fetching `/api/data`.
+`#notepad-content`, etc.). The SPA loads as a native ES module via
+`<script type="module" src="/app/main.js">` — no bundler. The browser
+fetches each `import "./foo.js"` on demand. `render.js` populates the
+placeholders by `innerHTML = ...` after fetching `/api/data`.
+
+`public/app/` modules:
+
+| Module | Owns |
+| --- | --- |
+| `main.js` | DOMContentLoaded wiring + button handlers |
+| `store.js` | shared mutable state — `{currentData, cachedUntouchedList, lastFetchTs}` (object pattern so mutations through imports are visible) |
+| `storage.js` | every `dashboard.*` localStorage key + getters/setters |
+| `dom.js` | `$`, `$$`, `esc`, `truncate`, `relAge` |
+| `api.js` | `fetchData`, `fetchRecs`, `intelligentRefresh` |
+| `render.js` | every `render*()` function + `render(data)` + `rebuildSidebar(data)` |
+| `notepad.js` | `wireMarkdownRemarks`, `renderMarkdown`, `initNotepad`, `applyNotepadVisibility`, `toggleNotepad` |
+| `jira-state.js` | `openStateMenu`, popover positioning, `handleStateTransition` (optimistic, with revert on failure) |
+| `restack-action.js` | `handleRestackClick` — confirm dialog + POST + spinner |
+| `refresh.js` | `setupAutoRefresh` (self-rescheduling setTimeout + visibilitychange catch-up), `updateFreshness`, `toggleAllStacks`, `syncStickyTop` |
+| `delegates.js` | `wireDelegates()` — idempotent event delegation; runs after every render |
 
 ### Layout
 
@@ -345,27 +402,35 @@ All under the `dashboard.*` namespace:
 
 ### To add a new server endpoint
 
-1. In `server.js`, add a route inside the `http.createServer` handler block.
-   Look for where `/api/health` is wired up — same pattern.
-2. If it needs slow data, route it through a cache layer like
+1. In `src/server/routes.js`, add a route inside `handle()`. Look for where
+   `/api/health` is wired up — same pattern.
+2. If the route needs business logic of its own, give it a module under
+   `src/server/` (e.g. `restack.js` is the model for that).
+3. If it needs slow data, route it through a cache layer like
    `getRecommendations` does (in-flight dedup + disk persist).
 
 ### To add a new section to the UI
 
-1. Add a `<section id="...">` placeholder to `index.html` inside `<main class="main-col">`.
-2. Add a render function in `app.js` (e.g., `renderXyz(data)`) and call it
-   from `render(data)`.
-3. Update `rebuildSidebar(data)` so the section shows up in the jump nav.
-4. Style it in `styles.css` — variables already cover light + dark mode.
+1. Add a `<section id="...">` placeholder to `index.html` inside
+   `<main class="main-col">`.
+2. Add a render function in `public/app/render.js` (e.g., `renderXyz(data)`)
+   and call it from `render(data)`.
+3. Update `rebuildSidebar(data)` (also in `render.js`) so the section shows
+   up in the jump nav.
+4. Style it in the appropriate `public/styles/*.css` partial — variables in
+   `base.css` already cover light + dark mode. Add a new partial only if
+   the section is large enough to warrant one (and add the `@import` to
+   `styles.css`).
 
 ### To add a new field to stack cards
 
-1. Server-side: enrich the stack model in `buildModel()`.
-2. Frontend: add the rendering inside `renderStackCard()` in `app.js`. Stack
-   card structure: `stack-summary` (visible always) → `stack-body` (revealed
-   when `.expanded`). Header info goes in `stack-summary`, detail in
-   `stack-body`. Anything inside `stack-summary` that should NOT toggle the
-   card on click should carry `data-stop-toggle`.
+1. Server-side: enrich the stack model in `src/server/model.js` →
+   `buildModel()`.
+2. Frontend: add the rendering inside `renderStackCard()` in
+   `public/app/render.js`. Stack card structure: `stack-summary` (visible
+   always) → `stack-body` (revealed when `.expanded`). Header info goes in
+   `stack-summary`, detail in `stack-body`. Anything inside `stack-summary`
+   that should NOT toggle the card on click should carry `data-stop-toggle`.
 
 ### To add a new persisted user-setting
 
@@ -379,10 +444,11 @@ function setFoo(v) { localStorage.setItem(FOO_KEY, v); }
 
 ### To call Claude for a new feature
 
-Use `callClaude(prompt, opts)` — it spawns the `claude` CLI, pipes the prompt
-via stdin, returns stdout. `opts.allowedTools` accepts a comma-separated MCP
-tool name list. `opts.model` defaults to `claude-haiku-4-5`. Always cache the
-result on disk via `loadDiskCache` / `saveDiskCache` if the answer is expensive
+Import from `src/server/claude.js`: `callClaude(prompt, opts)` spawns the
+`claude` CLI, pipes the prompt via stdin, returns stdout. `opts.allowedTools`
+accepts a comma-separated MCP tool name list. `opts.model` defaults to
+`claude-haiku-4-5`. Always cache the result on disk via `loadDiskCache` /
+`saveDiskCache` (from `src/server/disk-cache.js`) if the answer is expensive
 — Claude calls are 5–60s each.
 
 If Claude needs to return structured data, ask for JSON only and use
@@ -526,8 +592,10 @@ checks — ~28s baseline.
   - Status: `launchctl list | grep dashboard`
   - Hot restart after code change: `launchctl kickstart -k gui/$(id -u)/com.<you>.dashboard`
 - Logs: `/tmp/dashboard.log`, `/tmp/dashboard.err`.
-- For server.js or start.sh changes you need a restart. For `public/*.js`,
-  `public/*.css`, `public/*.html` — just hard-refresh the browser (Cmd+Shift+R).
+- For `src/server/*.js` or `start.sh` changes you need a restart (the
+  4-line `server.js` shim never changes). For `public/app/*.js`,
+  `public/styles/*.css`, `public/*.html` — just hard-refresh the browser
+  (Cmd+Shift+R).
 - The launchd job sets `KeepAlive=true` and `ThrottleInterval=30`, so
   unhandled crashes get auto-restarted with a 30s cooldown.
 

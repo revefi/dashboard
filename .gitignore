@@ -12,5 +12,6 @@ cache/
 .vscode/
 node_modules/
 
-# Refactor sanity-check snapshots (working dir; baseline is tracked).
-tmp/after/
+# Working scratch (snapshot harness output, etc.). Anything we want
+# tracked goes elsewhere.
+tmp/

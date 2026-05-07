@@ -236,7 +236,7 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
 | `GET /api/jira/transitions?key=REV-XXXX` | Lists valid transitions for a Jira ticket (proxies to Atlassian). Used by the State pill popover. |
 | `POST /api/jira/transition` | Body: `{ key, transition_id }`. Performs the transition and busts the data cache so the next refresh reflects the new status. |
 | `GET /api/health` | Lightweight status — cache age, recs cache state, Jira-configured flag. |
-| `GET /` + static | Serves `public/` — index, app.js, styles, `marked.min.js`, favicon. |
+| `GET /` + static | Serves `public/` — `index.html`, `app/*.js` modules, `styles/*.css` partials, `marked.min.js`, favicon. |
 
 ### Data sources
 
@@ -278,6 +278,47 @@ Jira ticket details and the assigned-tickets list have **no cache** — every
 plain ↻ Refresh fetches them fresh via direct REST (~50ms per ticket, ~200ms
 for the search). The `POST /api/jira/transition` endpoint also busts
 `/api/data`'s 30s cache on success so the new status surfaces immediately.
+
+### Project layout
+
+```
+src/server/         backend, split into focused CommonJS modules
+  index.js          boots http.createServer
+  config.js         env vars, paths, constants
+  shell.js          sh / shRetry / shWithInput
+  git.js            worktrees, behind, conflicts, gt-log parsing
+  gh.js             PRs + bulk GraphQL signals (review threads + CI)
+  jira.js           REST client + transitions
+  claude.js         callClaude, session scoring, stack-name gen
+  model.js          buildModel — the /api/data hot path
+  cache.js          in-memory cache + getData wrapper
+  recs.js           "Action items" Claude-backed recommendations
+  restack.js        POST /api/restack handler
+  routes.js         HTTP request dispatch + serveStatic
+  disk-cache.js     loadDiskCache / saveDiskCache (TTL-aware)
+public/app/         frontend, native ES modules — no bundler
+  main.js           DOMContentLoaded entry
+  store.js          shared mutable state
+  storage.js        localStorage keys + getters/setters
+  dom.js            $, $$, esc, truncate, relAge
+  api.js            fetchData, fetchRecs, intelligentRefresh
+  render.js         all render*() functions + render(data)
+  notepad.js        markdown editor + notepad init
+  jira-state.js     state-pill popover + transitions
+  restack-action.js restack click handler
+  refresh.js        auto-refresh, freshness, collapse-all
+  delegates.js      wireDelegates event delegation
+public/styles/      CSS partials, glued by public/styles.css @imports
+  base.css topbar.css summary.css stacks.css jira-table.css
+  recs.css sidebar.css jira-state.css markdown.css
+server.js           4-line shim — `require("./src/server")`
+start.sh            launchd wrapper (sets PATH, sources zshrc creds)
+```
+
+No `node_modules`, no build step, no framework. Everything runs the
+moment you `node server.js` (or `./start.sh`). Hot-reload backend changes
+via `launchctl kickstart -k gui/$(id -u)/com.<you>.dashboard`; frontend
+changes are picked up by a hard browser refresh.
 
 ### Codebase guide
 
