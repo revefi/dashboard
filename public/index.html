@@ -7,6 +7,17 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/marked.min.js" defer></script>
+    <script>
+      // Apply persisted theme override before first paint to avoid a FOUC
+      // (flash of OS-default theme then snap to user's choice). Reads the
+      // raw key so we don't need an ES-module roundtrip here.
+      (function () {
+        var t = localStorage.getItem("dashboard.theme");
+        if (t === "light" || t === "dark") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div class="wrap">
@@ -31,6 +42,13 @@
               title="Hide the right-side notepad to give the main column more room"
             >
               📓 Hide notepad
+            </button>
+            <button
+              class="refresh-btn"
+              id="toggle-theme-btn"
+              title="Cycle theme: Auto (follow OS) → Light → Dark → Auto"
+            >
+              💻 Auto
             </button>
             <button
               class="refresh-btn"

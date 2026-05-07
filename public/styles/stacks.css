@@ -42,9 +42,12 @@
   background: rgba(0, 0, 0, 0.02);
 }
 @media (prefers-color-scheme: dark) {
-  .stack-card > .stack-summary:hover {
+  :root:not([data-theme="light"]) .stack-card > .stack-summary:hover {
     background: rgba(255, 255, 255, 0.02);
   }
+}
+:root[data-theme="dark"] .stack-card > .stack-summary:hover {
+  background: rgba(255, 255, 255, 0.02);
 }
 .stack-head {
   display: flex;

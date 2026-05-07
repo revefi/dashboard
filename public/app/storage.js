@@ -11,6 +11,8 @@ export const SPRINT_FILTER_KEY = "dashboard.sprint_filter";
 export const STACK_FILTER_KEY = "dashboard.stack_filter";
 export const NOTEPAD_HIDDEN_KEY = "dashboard.notepad_hidden";
 export const LAST_INTEL_KEY = "dashboard.lastIntelligentTs";
+// Theme override: "light" or "dark" forces, absence means follow OS.
+export const THEME_KEY = "dashboard.theme";
 
 const DEFAULT_AUTO_REFRESH_MS = 600_000; // 10 minutes
 

@@ -14,6 +14,7 @@ import {
   applyNotepadVisibility,
   toggleNotepad,
 } from "./notepad.js";
+import { initTheme } from "./theme.js";
 
 document.addEventListener("DOMContentLoaded", () => {
   $("#refresh-btn").addEventListener("click", () => fetchData(true));
@@ -22,6 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#collapse-all-btn").addEventListener("click", toggleAllStacks);
   $("#toggle-notepad-btn").addEventListener("click", toggleNotepad);
   applyNotepadVisibility();
+  initTheme();
   // Per-card toggle listeners are wired in wireDelegates() (toggle doesn't bubble).
   setupAutoRefresh();
   updateFreshness(); // seed intel-freshness label from localStorage

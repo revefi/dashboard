@@ -17,8 +17,10 @@
   --code-bg: #f3f4f6;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
 }
+/* OS-driven dark mode. The :not([data-theme="light"]) guard lets a manual
+   "Light" toggle override the OS preference. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0b0e14;
     --card: #161b22;
     --border: #2a3038;
@@ -37,6 +39,26 @@
     --code-bg: #1f2630;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4);
   }
+}
+/* Manual dark mode (overrides OS). */
+:root[data-theme="dark"] {
+  --bg: #0b0e14;
+  --card: #161b22;
+  --border: #2a3038;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --primary: #58a6ff;
+  --primary-bg: #0d2847;
+  --success: #3fb950;
+  --success-bg: #0f2a1a;
+  --warn: #d29922;
+  --warn-bg: #2a1f0a;
+  --danger: #f85149;
+  --danger-bg: #2d1416;
+  --info: #a5b4fc;
+  --info-bg: #1c1f3a;
+  --code-bg: #1f2630;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 * {
   box-sizing: border-box;
