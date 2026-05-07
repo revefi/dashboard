@@ -6,8 +6,8 @@
     "totals": {
       "approved": 2,
       "changes_requested": 0,
-      "open_prs": 19,
-      "pending": 17,
+      "open_prs": 24,
+      "pending": 22,
       "stacks": 6
     }
   },
@@ -117,7 +117,7 @@
           "is_draft": false,
           "is_local": false,
           "jira_tag": "REV-13297",
-          "needs_restack": false,
+          "needs_restack": true,
           "num": 20543,
           "part_tag": "[Part 1]",
           "status_class": "primary",
@@ -197,7 +197,7 @@
           "is_draft": false,
           "is_local": false,
           "jira_tag": "REV-13054",
-          "needs_restack": false,
+          "needs_restack": true,
           "num": 20706,
           "part_tag": null,
           "status_class": "primary",
@@ -382,7 +382,7 @@
         "REV-13461"
       ],
       "name": "Page-Aware Prompt Categories",
-      "needs_restack": false,
+      "needs_restack": true,
       "prs": [
         {
           "bot_comments": "VOLATILE",
@@ -429,7 +429,7 @@
           "is_draft": false,
           "is_local": false,
           "jira_tag": "REV-13461",
-          "needs_restack": false,
+          "needs_restack": true,
           "num": 20963,
           "part_tag": "[Part 1]",
           "status_class": "primary",
@@ -480,7 +480,7 @@
         "REV-13336"
       ],
       "name": "Adopt Timestamp Conversion Utilities",
-      "needs_restack": false,
+      "needs_restack": true,
       "prs": [
         {
           "bot_comments": "VOLATILE",
@@ -527,7 +527,7 @@
           "is_draft": false,
           "is_local": false,
           "jira_tag": "REV-13336",
-          "needs_restack": false,
+          "needs_restack": true,
           "num": 21153,
           "part_tag": "[Part 1]",
           "status_class": "primary",
@@ -551,7 +551,7 @@
       "upstream": null,
       "upstream_prs": [],
       "worktree": {
-        "branch": "varungql-timestamp_3",
+        "branch": "gql-timestamp_1",
         "name": "rev-13336-gql-timestamp",
         "path": "/Users/varun/Desktop/workspace/rcode/.claude/worktrees/rev-13336-gql-timestamp"
       }
@@ -563,9 +563,9 @@
       "counts": {
         "approved": 0,
         "changes_requested": 0,
-        "created": 1,
+        "created": 6,
         "merged": 0,
-        "pending": 1
+        "pending": 6
       },
       "jira_chips": [
         {
@@ -582,21 +582,111 @@
       "prs": [
         {
           "bot_comments": "VOLATILE",
-          "branch": "varunrev-13517_settings-drawers_4",
-          "checks": null,
+          "branch": "varunrev-13517_monitor-aiops-drawers_6",
+          "checks": "VOLATILE",
           "decision": "REVIEW_REQUIRED",
           "human_comments": "VOLATILE",
           "is_draft": false,
-          "is_local": true,
+          "is_local": false,
           "jira_tag": "REV-13517",
           "needs_restack": false,
-          "num": null,
+          "num": 21162,
+          "part_tag": "[Part 6]",
+          "status_class": "primary",
+          "status_label": "Needs review",
+          "title": "Sticky footer on monitor, query-rewrite, and aiops drawers",
+          "updated_label": "VOLATILE",
+          "url": "https://app.graphite.com/github/pr/revefi/rcode/21162"
+        },
+        {
+          "bot_comments": "VOLATILE",
+          "branch": "varunrev-13517_email-incident-drawers_5",
+          "checks": "VOLATILE",
+          "decision": "REVIEW_REQUIRED",
+          "human_comments": "VOLATILE",
+          "is_draft": false,
+          "is_local": false,
+          "jira_tag": "REV-13517",
+          "needs_restack": false,
+          "num": 21161,
+          "part_tag": "[Part 5]",
+          "status_class": "primary",
+          "status_label": "Needs review",
+          "title": "Sticky footer on Email and Create Jira Incident drawers",
+          "updated_label": "VOLATILE",
+          "url": "https://app.graphite.com/github/pr/revefi/rcode/21161"
+        },
+        {
+          "bot_comments": "VOLATILE",
+          "branch": "varunrev-13517_settings-drawers_4",
+          "checks": "VOLATILE",
+          "decision": "REVIEW_REQUIRED",
+          "human_comments": "VOLATILE",
+          "is_draft": false,
+          "is_local": false,
+          "jira_tag": "REV-13517",
+          "needs_restack": false,
+          "num": 21160,
           "part_tag": "[Part 4]",
-          "status_class": "local",
-          "status_label": "Local only",
+          "status_class": "primary",
+          "status_label": "Needs review",
           "title": "Sticky footer on Configure Notification and Create API Token drawers",
           "updated_label": "VOLATILE",
-          "url": null
+          "url": "https://app.graphite.com/github/pr/revefi/rcode/21160"
+        },
+        {
+          "bot_comments": "VOLATILE",
+          "branch": "varunrev-13517_ticket-drawers_3",
+          "checks": "VOLATILE",
+          "decision": "REVIEW_REQUIRED",
+          "human_comments": "VOLATILE",
+          "is_draft": false,
+          "is_local": false,
+          "jira_tag": "REV-13517",
+          "needs_restack": false,
+          "num": 21159,
+          "part_tag": "[Part 3]",
+          "status_class": "primary",
+          "status_label": "Needs review",
+          "title": "Sticky footer on Acknowledge and Followup drawers",
+          "updated_label": "VOLATILE",
+          "url": "https://app.graphite.com/github/pr/revefi/rcode/21159"
+        },
+        {
+          "bot_comments": "VOLATILE",
+          "branch": "varunrev-13517_edit-warehouse-drawer_2",
+          "checks": "VOLATILE",
+          "decision": "REVIEW_REQUIRED",
+          "human_comments": "VOLATILE",
+          "is_draft": false,
+          "is_local": false,
+          "jira_tag": "REV-13517",
+          "needs_restack": false,
+          "num": 21158,
+          "part_tag": "[Part 2]",
+          "status_class": "primary",
+          "status_label": "Needs review",
+          "title": "Sticky footer on Edit Warehouse drawer",
+          "updated_label": "VOLATILE",
+          "url": "https://app.graphite.com/github/pr/revefi/rcode/21158"
+        },
+        {
+          "bot_comments": "VOLATILE",
+          "branch": "varunrev-13517-sticky-drawer-footer-1",
+          "checks": "VOLATILE",
+          "decision": "REVIEW_REQUIRED",
+          "human_comments": "VOLATILE",
+          "is_draft": false,
+          "is_local": false,
+          "jira_tag": "REV-13517",
+          "needs_restack": false,
+          "num": 21157,
+          "part_tag": "[Part 1]",
+          "status_class": "primary",
+          "status_label": "Needs review",
+          "title": "Add footerActions slot to SideDrawer",
+          "updated_label": "VOLATILE",
+          "url": "https://app.graphite.com/github/pr/revefi/rcode/21157"
         }
       ],
       "restack_check": "VOLATILE",
@@ -607,13 +697,13 @@
       },
       "stack_key": "REV-13517",
       "top_pr": {
-        "num": null,
-        "url": null
+        "num": 21162,
+        "url": "https://app.graphite.com/github/pr/revefi/rcode/21162"
       },
       "upstream": null,
       "upstream_prs": [],
       "worktree": {
-        "branch": "varunrev-13517_settings-drawers_4",
+        "branch": "varunrev-13517_monitor-aiops-drawers_6",
         "name": "rev-13517-sticky-drawer-footer",
         "path": "/Users/varun/Desktop/workspace/rcode/.claude/worktrees/rev-13517-sticky-drawer-footer"
       }

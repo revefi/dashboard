@@ -23,7 +23,9 @@ URL="${DASHBOARD_URL:-http://localhost:7787}"
 FILTER="$DIR/tools/snapshot-filter.jq"
 TARGET="$DIR/$OUT"
 
-rm -rf "$TARGET"
+# Reset only the api/ dir; preserve dom.html (captured separately via
+# Playwright MCP) and any other files an operator may have stashed there.
+rm -rf "$TARGET/api"
 mkdir -p "$TARGET/api"
 
 if ! curl -sf "$URL/api/health" > /dev/null; then

@@ -5,407 +5,55 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { exec, execFile, spawn } = require("child_process");
-const { promisify } = require("util");
+const { spawn } = require("child_process");
 
-const execP = promisify(exec);
-const execFileP = promisify(execFile);
-
-// Claude session dir name = the absolute project path with every non-alnum,
-// non-hyphen character replaced by "-". Matches what `claude` CLI produces
-// under ~/.claude/projects/.
-function encodeProjectDir(absPath) {
-  return absPath.replace(/[^A-Za-z0-9-]/g, "-");
-}
-
-const REPO = process.env.WORKSPACE_PATH;
-if (!REPO) {
-  console.error(
-    "ERROR: WORKSPACE_PATH env var not set. Add `export WORKSPACE_PATH=/path/to/rcode` to ~/.zshrc and reload."
-  );
-  process.exit(1);
-}
-const HOME = process.env.HOME || "/";
-const SESSIONS_ROOT = path.join(HOME, ".claude", "projects");
-const MAIN_SESSIONS_DIR = path.join(SESSIONS_ROOT, encodeProjectDir(REPO));
-const PORT = parseInt(process.env.PORT || "7787", 10);
-const CACHE_TTL_MS = 30_000;
-const STATIC_DIR = path.join(__dirname, "public");
-const CACHE_DIR = path.join(__dirname, "cache");
-const RECS_CACHE_FILE = path.join(CACHE_DIR, "recommendations.json");
-
-// ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN are read from the shell environment
-// (set them in ~/.zshrc — see README).
+const {
+  encodeProjectDir,
+  REPO,
+  HOME,
+  SESSIONS_ROOT,
+  MAIN_SESSIONS_DIR,
+  PORT,
+  CACHE_TTL_MS,
+  STATIC_DIR,
+  CACHE_DIR,
+  RECS_CACHE_FILE,
+  STACK_NAMES_CACHE_FILE,
+  STACK_NAMES_TTL_MS,
+} = require("./src/server/config");
+const { sh, shRetry, shWithInput, execP, execFileP } = require("./src/server/shell");
+const { loadDiskCache, saveDiskCache } = require("./src/server/disk-cache");
+const {
+  parseGtLog,
+  buildStacksFromGtLog,
+  fetchWorktrees,
+  fetchOriginMain,
+  fetchStackBehind,
+  checkRestackConflicts,
+  fetchLocalBranchMeta,
+  isRebaseInProgress,
+} = require("./src/server/git");
+const {
+  getLogin,
+  fetchOpenPRs,
+  fetchRecentMergedPRs,
+  fetchAnyPR,
+  fetchPRMeta,
+  fetchPrSignalsBulk,
+  summarizeChecks,
+} = require("./src/server/gh");
+const {
+  jiraConfigured,
+  fetchJiraTickets,
+  fetchOpenJiraTickets,
+  fetchJiraTransitions,
+  performJiraTransition,
+  deriveJiraNote,
+} = require("./src/server/jira");
 
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 
 let cache = { ts: 0, data: null, building: null };
-
-// ---------- shell helpers ----------
-async function sh(cmd, opts = {}) {
-  const { stdout } = await execP(cmd, {
-    cwd: REPO,
-    maxBuffer: 50 * 1024 * 1024,
-    ...opts,
-  });
-  return stdout;
-}
-
-async function shRetry(cmd, opts = {}, attempts = 3) {
-  let lastErr;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await sh(cmd, opts);
-    } catch (e) {
-      lastErr = e;
-      if (i < attempts - 1)
-        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
-    }
-  }
-  throw lastErr;
-}
-
-// Like sh() but pipes `input` to the child's stdin. Used when we need to send a
-// multi-line payload (e.g. a GraphQL query) that's awkward to inline in the cmd.
-async function shWithInput(cmd, input, opts = {}) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, {
-      shell: true,
-      cwd: REPO,
-      ...opts,
-    });
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d) => (stdout += d));
-    proc.stderr.on("data", (d) => (stderr += d));
-    proc.on("close", (code) => {
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`shell exit ${code}: ${stderr.slice(0, 500)}`));
-    });
-    proc.on("error", reject);
-    proc.stdin.write(input);
-    proc.stdin.end();
-  });
-}
-
-// ---------- gt log parsing ----------
-function parseGtLog(text) {
-  const lines = text.split("\n");
-  const parsed = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    // Match: leading whitespace, glyph (↱◯◉), optional `─┴┘├` connectors, optional `$`, branch, rest.
-    const m = line.match(/^(\s*)[↱◯◉][─┴┘├│\s]*\$?\s*(\S+)\s*(.*)$/);
-    if (!m) continue;
-    const depth = m[1].length;
-    const branch = m[2];
-    const rest = (m[3] || "").trim();
-    const flags = (rest.match(/\(([^)]+)\)/g) || []).map((s) =>
-      s.slice(1, -1).trim()
-    );
-    // Skip "(<worktree-name>)" annotations from flags by matching against a known worktree set later.
-    parsed.push({ depth, branch, flags });
-  }
-  return parsed;
-}
-
-function buildStacksFromGtLog(parsedLines) {
-  // Leaves are lines whose previous line has equal-or-less depth (top-of-stack).
-  const stacks = [];
-  for (let i = 0; i < parsedLines.length; i++) {
-    const cur = parsedLines[i];
-    if (cur.branch === "main") continue;
-    const prev = parsedLines[i - 1];
-    const isLeaf = !prev || prev.depth <= cur.depth;
-    if (!isLeaf) continue;
-
-    // Walk down: ancestors are subsequent lines with strictly smaller depth than current min.
-    const chain = [cur];
-    let minDepth = cur.depth;
-    for (let j = i + 1; j < parsedLines.length; j++) {
-      const nxt = parsedLines[j];
-      if (nxt.depth < minDepth) {
-        chain.push(nxt);
-        minDepth = nxt.depth;
-        if (nxt.branch === "main") break;
-      }
-    }
-    // Drop trunk from chain (we render it separately).
-    const trimmed = chain.filter((b) => b.branch !== "main");
-    if (trimmed.length === 0) continue;
-    stacks.push(trimmed);
-  }
-  return stacks;
-}
-
-// ---------- worktrees ----------
-async function fetchWorktrees() {
-  const stdout = await sh("git worktree list --porcelain");
-  const out = [];
-  let cur = {};
-  for (const line of stdout.split("\n")) {
-    if (line.startsWith("worktree ")) cur = { path: line.slice(9) };
-    else if (line.startsWith("branch "))
-      cur.branch = line.slice(7).replace(/^refs\/heads\//, "");
-    else if (line === "") {
-      if (cur.path) out.push(cur);
-      cur = {};
-    }
-  }
-  if (cur.path) out.push(cur);
-  return out
-    .filter((w) => w.path.includes("/.claude/worktrees/"))
-    .map((w) => ({
-      ...w,
-      name: path.basename(w.path),
-    }));
-}
-
-// Update remote-tracking ref so per-stack behind counts are fresh. Read-only
-// w.r.t. local branches and worktrees.
-async function fetchOriginMain() {
-  try {
-    await sh("git fetch origin main --quiet");
-  } catch {
-    // ignore — offline or transient; per-stack counts will use whatever
-    // origin/main we have locally.
-  }
-}
-
-// How many commits `origin/main` has that this stack's fork-point on main
-// doesn't. Per-stack because different stacks can branch off different
-// commits of main (e.g. created at different times, or partially restacked).
-async function fetchStackBehind(branch) {
-  try {
-    const base = (
-      await sh(`git merge-base ${branch} origin/main`)
-    ).trim();
-    if (!base) return 0;
-    const out = await sh(`git rev-list --count ${base}..origin/main`);
-    return parseInt(out.trim(), 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-// Predict whether `gt restack` will hit conflicts by performing an in-memory
-// 3-way merge between origin/main and the stack's leaf branch. Read-only —
-// `git merge-tree --write-tree` writes objects to the loose-object store but
-// never modifies refs or working trees. Exit 0 = clean, 1 = conflicts (with
-// conflicting paths listed after the tree OID).
-async function checkRestackConflicts(branch) {
-  try {
-    const { stdout } = await execP(
-      `git merge-tree --write-tree --name-only --no-messages origin/main ${branch}`,
-      { cwd: REPO, maxBuffer: 5 * 1024 * 1024 }
-    );
-    // exit 0 — first line is tree OID, no further output.
-    return { ok: true, conflicts: [] };
-  } catch (e) {
-    if (e.code === 1 && e.stdout) {
-      const lines = e.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
-      // First line is the (incomplete) tree OID; the rest are conflicting paths.
-      const conflicts = [...new Set(lines.slice(1))];
-      return { ok: false, conflicts };
-    }
-    // Other errors (missing branch, missing origin/main, etc.) — return null
-    // so the UI can fall back to "unknown" rather than claiming success.
-    return null;
-  }
-}
-
-// ---------- PRs ----------
-const GH_REPO_FLAG = "--repo revefi/rcode";
-let cachedLogin = null;
-
-async function getLogin() {
-  if (cachedLogin) return cachedLogin;
-  const stdout = await shRetry(`gh api user --jq .login`);
-  cachedLogin = stdout.trim();
-  return cachedLogin;
-}
-
-async function fetchOpenPRs() {
-  // gh's --author filter returns 0 results when invoked under Node child_process for reasons
-  // I cannot pin down — works fine from interactive shell. Workaround: fetch all open PRs via
-  // gh pr list (no filter) and filter to my login client-side.
-  const login = await getLogin();
-  const stdout = await shRetry(
-    `gh pr list ${GH_REPO_FLAG} --state open --limit 200 ` +
-      `--json number,title,url,isDraft,createdAt,updatedAt,headRefName,baseRefName,reviewDecision,author`
-  );
-  const all = JSON.parse(stdout);
-  return all.filter((p) => p.author?.login === login);
-}
-
-async function fetchRecentMergedPRs() {
-  const login = await getLogin();
-  const stdout = await shRetry(
-    `gh api "repos/revefi/rcode/pulls?state=closed&per_page=50" ` +
-      `--jq '[.[] | select(.user.login == "${login}") | select(.merged_at != null) | ` +
-      `{n: .number, h: .head.ref, b: .base.ref, m: .merged_at, t: .title}]'`
-  );
-  return JSON.parse(stdout || "[]");
-}
-
-async function fetchAnyPR(branch) {
-  try {
-    const stdout = await shRetry(
-      `gh pr list ${GH_REPO_FLAG} --search "head:${branch}" --state all --limit 1 ` +
-        `--json number,state,title,url,headRefName,author`
-    );
-    const arr = JSON.parse(stdout);
-    return arr[0] || null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchPRMeta(num) {
-  try {
-    const stdout = await shRetry(
-      `gh pr view ${num} ${GH_REPO_FLAG} --json number,title,url,reviewDecision,headRefName,updatedAt,author,state`
-    );
-    return JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-}
-
-// Fetch unresolved review-thread counts AND CI check rollup for many PRs in
-// a single GraphQL request. Uses aliased fields
-// (`p<NUM>: repository(...) { pullRequest(number: NUM) {...} }`) so we get
-// the full set in one network round-trip instead of one per PR.
-async function fetchPrSignalsBulk(nums) {
-  if (!nums || nums.length === 0) return new Map();
-  const aliasFor = (n) => `p${n}`;
-  const fragments = nums
-    .map(
-      (n) => `
-  ${aliasFor(n)}: repository(owner: "revefi", name: "rcode") {
-    pullRequest(number: ${n}) {
-      reviewThreads(first: 50) {
-        nodes { isResolved comments(first: 1) { nodes { author { login } } } }
-      }
-      commits(last: 1) {
-        nodes {
-          commit {
-            statusCheckRollup {
-              contexts(first: 100) {
-                nodes {
-                  __typename
-                  ... on CheckRun { name conclusion status startedAt }
-                  ... on StatusContext { context state createdAt }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }`
-    )
-    .join("");
-  const query = `query {${fragments}\n}`;
-
-  const result = new Map();
-  for (const n of nums) {
-    result.set(n, { human: 0, bot: 0, checks: null });
-  }
-  try {
-    const stdout = await shWithInput(`gh api graphql -F query=@-`, query);
-    const json = JSON.parse(stdout);
-    const data = json?.data || {};
-    for (const n of nums) {
-      const pr = data[aliasFor(n)]?.pullRequest;
-      const threadNodes = pr?.reviewThreads?.nodes || [];
-      let h = 0,
-        b = 0;
-      for (const node of threadNodes) {
-        if (node.isResolved) continue;
-        const isBot = node.comments?.nodes?.[0]?.author?.login === "claude";
-        if (isBot) b++;
-        else h++;
-      }
-      result.set(n, {
-        human: h,
-        bot: b,
-        checks: summarizeChecks(pr?.commits?.nodes?.[0]?.commit?.statusCheckRollup),
-      });
-    }
-  } catch (err) {
-    console.warn("[pr-signals] bulk fetch failed:", err.message);
-  }
-  return result;
-}
-
-// Collapse the GraphQL statusCheckRollup into the shape the dashboard needs.
-//
-// Critical: we DEDUPE by check name and keep only the latest run. When a CI
-// re-run happens (or a workflow gets superseded by a new push), the earlier
-// run is left in place with conclusion=CANCELLED — counting those as
-// failures is wrong (and is exactly why GitHub's own `state` field returns
-// FAILURE while `gh pr checks` shows the PR as passing). Dedup gives us the
-// same view as `gh pr checks`.
-function summarizeChecks(rollup) {
-  if (!rollup) return null;
-  const FAIL_CONCLUSIONS = new Set([
-    "FAILURE",
-    "TIMED_OUT",
-    "ACTION_REQUIRED",
-    "STARTUP_FAILURE",
-  ]);
-  const FAIL_STATUSES = new Set(["FAILURE", "ERROR"]);
-  const ctxNodes = rollup.contexts?.nodes || [];
-
-  // Keep the latest run per name. CheckRun → use startedAt; StatusContext →
-  // use createdAt. Both are ISO 8601 strings so plain string compare works.
-  const latest = new Map(); // name → node
-  for (const c of ctxNodes) {
-    const name =
-      c.__typename === "CheckRun"
-        ? c.name
-        : c.__typename === "StatusContext"
-        ? c.context
-        : null;
-    if (!name) continue;
-    const ts = c.startedAt || c.createdAt || "";
-    const key = `${c.__typename}:${name}`;
-    const prev = latest.get(key);
-    if (!prev || ts > (prev.startedAt || prev.createdAt || "")) {
-      latest.set(key, c);
-    }
-  }
-
-  const failing = [];
-  let running = 0;
-  let total = 0;
-  for (const c of latest.values()) {
-    total++;
-    if (c.__typename === "CheckRun") {
-      if (c.status === "IN_PROGRESS" || c.status === "QUEUED" || c.status === "PENDING") {
-        running++;
-      } else if (c.conclusion && FAIL_CONCLUSIONS.has(c.conclusion)) {
-        failing.push(c.name);
-      }
-      // CANCELLED / SKIPPED / NEUTRAL on the *latest* run aren't treated as
-      // failures — matches `gh pr checks` and Graphite.
-    } else if (c.__typename === "StatusContext") {
-      if (c.state === "PENDING" || c.state === "EXPECTED") running++;
-      else if (c.state && FAIL_STATUSES.has(c.state)) failing.push(c.context);
-    }
-  }
-
-  // Compute our own rollup state — GitHub's `state` field counts the
-  // superseded runs.
-  let state;
-  if (failing.length > 0) state = "FAILURE";
-  else if (running > 0) state = "PENDING";
-  else if (total > 0) state = "SUCCESS";
-  else state = null;
-
-  return { state, failing, running, total };
-}
 
 // ---------- Claude CLI helper ----------
 function callClaude(prompt, opts = {}) {
@@ -458,202 +106,6 @@ function parseJsonLoose(text) {
     } catch {}
   }
   return null;
-}
-
-// Disk cache helper with TTL.
-function loadDiskCache(file) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (raw.expiresAt && new Date(raw.expiresAt).getTime() < Date.now())
-      return null;
-    return raw.data;
-  } catch {
-    return null;
-  }
-}
-function saveDiskCache(file, data, ttlMs) {
-  try {
-    const payload = {
-      data,
-      expiresAt: ttlMs ? new Date(Date.now() + ttlMs).toISOString() : null,
-    };
-    fs.writeFileSync(file, JSON.stringify(payload, null, 2));
-  } catch (err) {
-    console.warn(`[disk-cache] save failed for ${file}:`, err.message);
-  }
-}
-
-const STACK_NAMES_CACHE_FILE = path.join(CACHE_DIR, "stack-names.json");
-const STACK_NAMES_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (regenerates on PR-set change anyway)
-
-// ---------- Jira ----------
-const JIRA_BASE = "https://revefi.atlassian.net";
-
-function jiraConfigured() {
-  return !!(process.env.ATLASSIAN_EMAIL && process.env.ATLASSIAN_API_TOKEN);
-}
-
-async function jiraGet(pathStr) {
-  if (!jiraConfigured()) return null;
-  const auth = Buffer.from(
-    `${process.env.ATLASSIAN_EMAIL}:${process.env.ATLASSIAN_API_TOKEN}`
-  ).toString("base64");
-  const res = await fetch(`${JIRA_BASE}${pathStr}`, {
-    headers: { Authorization: `Basic ${auth}`, Accept: "application/json" },
-  });
-  if (!res.ok) throw new Error(`Jira ${pathStr}: ${res.status}`);
-  return res.json();
-}
-
-async function jiraPost(pathStr, body, opts = {}) {
-  if (!jiraConfigured()) return null;
-  const auth = Buffer.from(
-    `${process.env.ATLASSIAN_EMAIL}:${process.env.ATLASSIAN_API_TOKEN}`
-  ).toString("base64");
-  const res = await fetch(`${JIRA_BASE}${pathStr}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${auth}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Jira ${pathStr}: ${res.status} ${text.slice(0, 200)}`);
-  }
-  // Some Jira POSTs (transitions) return 204 No Content; opts.expectEmpty
-  // skips the JSON parse for those.
-  if (opts.expectEmpty || res.status === 204) return null;
-  return res.json();
-}
-
-// ---------- Jira (direct REST) ----------
-// Fast (~50ms/ticket), so we fetch fresh on every buildModel — no disk cache.
-// Without ATLASSIAN_* in the env, all calls return empty and the UI shows a
-// "Jira not configured" hint.
-
-function parseActiveSprint(field) {
-  // Sprint custom field: array of sprint objects with id/name/state/startDate/endDate.
-  if (!Array.isArray(field)) return null;
-  const chosen =
-    field.find((s) => s && s.state === "active") ||
-    field[field.length - 1] ||
-    null;
-  if (!chosen) return null;
-  return {
-    id: chosen.id,
-    name: chosen.name,
-    state: chosen.state,
-    start_date: chosen.startDate || null,
-    end_date: chosen.endDate || null,
-  };
-}
-
-async function fetchJiraTickets(keys) {
-  if (keys.length === 0 || !jiraConfigured()) return {};
-  const fields = "summary,issuetype,status,priority,updated";
-  const entries = await Promise.all(
-    keys.map(async (key) => {
-      try {
-        const data = await jiraGet(
-          `/rest/api/3/issue/${encodeURIComponent(key)}?fields=${fields}`
-        );
-        if (!data) return null;
-        return [
-          key,
-          {
-            key: data.key,
-            summary: data.fields.summary,
-            type: data.fields.issuetype?.name || "Task",
-            status: data.fields.status?.name || "",
-            priority: data.fields.priority?.name || "Medium",
-            updated: data.fields.updated,
-          },
-        ];
-      } catch {
-        return null;
-      }
-    })
-  );
-  return Object.fromEntries(entries.filter(Boolean));
-}
-
-async function fetchJiraTicket(key) {
-  const map = await fetchJiraTickets([key]);
-  return map[key] || null;
-}
-
-async function fetchOpenJiraTickets() {
-  if (!jiraConfigured()) return [];
-  try {
-    const data = await jiraPost(`/rest/api/3/search/jql`, {
-      jql: "assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC",
-      // customfield_10020 = "Sprint" on revefi.atlassian.net.
-      fields: [
-        "summary",
-        "issuetype",
-        "status",
-        "priority",
-        "updated",
-        "created",
-        "customfield_10020",
-      ],
-      maxResults: 50,
-    });
-    if (!data || !data.issues) return [];
-    return data.issues.map((i) => ({
-      key: i.key,
-      summary: i.fields.summary,
-      type: i.fields.issuetype?.name || "Task",
-      status: i.fields.status?.name || "",
-      // Jira's three top-level status buckets — used for sort + pill colour:
-      //   "new" (To Do/Backlog), "indeterminate" (In Progress/In Review),
-      //   "done" (Done/Closed). Tickets in `done` shouldn't be in this list
-      //   anyway because of the `statusCategory != Done` JQL filter.
-      status_category: i.fields.status?.statusCategory?.key || "new",
-      priority: i.fields.priority?.name || "Medium",
-      updated: i.fields.updated,
-      created: i.fields.created,
-      sprint: parseActiveSprint(i.fields.customfield_10020),
-    }));
-  } catch (err) {
-    console.warn("[jira] fetchOpenJiraTickets failed:", err.message);
-    return [];
-  }
-}
-
-// Fetch the valid transitions for a ticket (e.g. "Start Progress",
-// "In Review", "Done"). Each entry has `{ id, name, to_status }`. The frontend
-// uses `id` when posting back.
-async function fetchJiraTransitions(key) {
-  if (!jiraConfigured()) return [];
-  if (!/^[A-Z]+-\d+$/.test(key)) throw new Error("invalid jira key");
-  const data = await jiraGet(
-    `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`
-  );
-  if (!data || !Array.isArray(data.transitions)) return [];
-  return data.transitions.map((t) => ({
-    id: t.id,
-    name: t.name,
-    to_status: t.to?.name || t.name,
-    to_category: t.to?.statusCategory?.key || null,
-  }));
-}
-
-// Perform a transition. POST returns 204 No Content on success.
-async function performJiraTransition(key, transitionId) {
-  if (!jiraConfigured()) throw new Error("jira not configured");
-  if (!/^[A-Z]+-\d+$/.test(key)) throw new Error("invalid jira key");
-  if (!/^\d+$/.test(String(transitionId))) {
-    throw new Error("invalid transition id");
-  }
-  await jiraPost(
-    `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`,
-    { transition: { id: String(transitionId) } },
-    { expectEmpty: true }
-  );
 }
 
 // ---------- session scoring ----------
@@ -739,30 +191,6 @@ function parseTitle(title) {
     body = body.slice(pm[0].length);
   }
   return { jira_tag: jiraTag, part_tag: partTag, title: body.trim() };
-}
-
-// For local-only branches (worktree exists, no PR yet), synthesize a PR-like
-// object from the latest commit so downstream rendering keeps working.
-async function fetchLocalBranchMeta(branch) {
-  try {
-    const stdout = await sh(
-      `git log ${branch} --format='%s%n%cI' -n1 --no-color`
-    );
-    const lines = stdout.split("\n");
-    const title = (lines[0] || "").trim();
-    const updatedAt = (lines[1] || "").trim();
-    return {
-      number: null,
-      title: title || branch,
-      isDraft: false,
-      reviewDecision: null,
-      updatedAt,
-      headRefName: branch,
-      isLocal: true,
-    };
-  } catch {
-    return null;
-  }
 }
 
 function relTime(iso) {
@@ -1282,11 +710,6 @@ async function buildModel() {
   };
 }
 
-function deriveJiraNote(t) {
-  if (t.type === "Bug") return "Customer-visible";
-  return "—";
-}
-
 // ---------- stack-name generation (Claude, cached by PR-set hash) ----------
 function stackPrHash(stack) {
   return [...stack.prs.map((p) => p.num)].sort((a, b) => a - b).join(",");
@@ -1550,21 +973,6 @@ async function restackStack(stackKey) {
       .filter(Boolean)
       .join("\n"),
   };
-}
-
-async function isRebaseInProgress(wt) {
-  try {
-    const gitDir = (
-      await execP(`git -C '${wt}' rev-parse --git-dir`)
-    ).stdout.trim();
-    const abs = gitDir.startsWith("/") ? gitDir : path.join(wt, gitDir);
-    return (
-      fs.existsSync(path.join(abs, "rebase-merge")) ||
-      fs.existsSync(path.join(abs, "rebase-apply"))
-    );
-  } catch {
-    return false;
-  }
 }
 
 async function getData(forceRefresh = false, opts = {}) {

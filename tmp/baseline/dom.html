@@ -53,7 +53,7 @@
         </aside>
 
         <main class="main-col">
-          <div class="summary" id="summary"><div class="stat" title="Number of distinct PR stacks you have open. Each stack is one connected chain of branches under the same Jira ticket(s)."><div class="v">6</div><div class="l">Active stacks</div></div><div class="stat" title="Total open PRs you authored across all stacks."><div class="v">19</div><div class="l">Open PRs</div></div><div class="stat ok" title="PRs whose review state is APPROVED."><div class="v">2</div><div class="l">Approved</div></div><div class="stat pending" title="PRs that haven't been approved yet and don't have changes requested."><div class="v">17</div><div class="l">Pending review</div></div></div>
+          <div class="summary" id="summary"><div class="stat" title="Number of distinct PR stacks you have open. Each stack is one connected chain of branches under the same Jira ticket(s)."><div class="v">6</div><div class="l">Active stacks</div></div><div class="stat" title="Total open PRs you authored across all stacks."><div class="v">24</div><div class="l">Open PRs</div></div><div class="stat ok" title="PRs whose review state is APPROVED."><div class="v">2</div><div class="l">Approved</div></div><div class="stat pending" title="PRs that haven't been approved yet and don't have changes requested."><div class="v">22</div><div class="l">Pending review</div></div></div>
           <div id="error-banner" class="error-banner" style="display: none"></div>
 
           <section id="active-section">
@@ -371,7 +371,7 @@
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
             <span class="pill awaiting_review" title="At least one PR in the stack hasn't been reviewed/approved yet. Nothing actionable on your side — just waiting.">Awaiting review</span>
-            
+            <span class="pill warn">⚠ Needs restack</span>
           </div>
         </div>
         <div class="counts NORM">COUNTS</div>
@@ -388,7 +388,7 @@
       </div>
       <div class="stack-body">
         
-        
+        <div class="restack-warn">⚠️ Run <code>gt restack</code> before merging.</div>
         <div class="stack-list">
           
     <div class="stack-row primary">
@@ -457,7 +457,7 @@
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
             <span class="pill awaiting_review" title="At least one PR in the stack hasn't been reviewed/approved yet. Nothing actionable on your side — just waiting.">Awaiting review</span>
-            
+            <span class="pill warn">⚠ Needs restack</span>
           </div>
         </div>
         <div class="counts NORM">COUNTS</div>
@@ -474,7 +474,7 @@
       </div>
       <div class="stack-body">
         
-        
+        <div class="restack-warn">⚠️ Run <code>gt restack</code> before merging.</div>
         <div class="stack-list">
           
     <div class="stack-row primary">
@@ -536,7 +536,7 @@
               <span class="stack-num-h">#6</span><span class="stack-name-text">Sticky Footers On Drawers</span><button class="stack-name-edit" data-edit-name="" data-stop-toggle="" title="Edit name (click to rename)" type="button">✎</button>
             </div>
             <div class="meta-row" style="margin-top:0">
-              
+              <span><b>Top:</b> <a href="https://app.graphite.com/github/pr/revefi/rcode/21162" target="_blank" rel="noopener" onclick="event.stopPropagation()">#21162</a></span>
               <span><b>Worktree:</b> <code>rev-13517-sticky-drawer-footer</code></span>
             </div>
             <div class="chips"><a class="chip" href="https://revefi.atlassian.net/browse/REV-13517" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="REV-13517 — [UX] Stick Save/Cancel buttons to footer in Edit Warehouse side drawer (and audit other drawers)">REV-13517 — [UX] Stick Save/Cancel buttons to footer in Edit Warehouse …</a></div>
@@ -563,17 +563,82 @@
         
         <div class="stack-list">
           
-    <div class="stack-row local">
-      <span class="stack-link no-pr">
-        <span class="stack-num">—</span>
+    <div class="stack-row primary">
+      <a class="stack-link" href="https://app.graphite.com/github/pr/revefi/rcode/21162" target="_blank" rel="noopener">
+        <span class="stack-num">#21162</span>
+        <span class="stack-jira">[REV-13517][Part 6]</span>
+        <span class="stack-pr-title" title="Sticky footer on monitor, query-rewrite, and aiops drawers">Sticky footer on monitor, query-rewrite, and aiops drawers</span>
+        
+      </a>
+      <button class="pr-copy-branch" data-copy="" data-cmd="varunrev-13517_monitor-aiops-drawers_6" title="Copy branch name: varunrev-13517_monitor-aiops-drawers_6" aria-label="Copy branch name">⎘</button>
+      
+      <span class="stack-checks NORM">CHECKS</span>
+      <span class="stack-status primary">Needs review</span>
+      <span class="stack-time">TIME</span>
+    </div>
+    <div class="stack-row primary">
+      <a class="stack-link" href="https://app.graphite.com/github/pr/revefi/rcode/21161" target="_blank" rel="noopener">
+        <span class="stack-num">#21161</span>
         <span class="stack-jira">[REV-13517][Part 5]</span>
         <span class="stack-pr-title" title="Sticky footer on Email and Create Jira Incident drawers">Sticky footer on Email and Create Jira Incident drawers</span>
         
-      </span>
+      </a>
       <button class="pr-copy-branch" data-copy="" data-cmd="varunrev-13517_email-incident-drawers_5" title="Copy branch name: varunrev-13517_email-incident-drawers_5" aria-label="Copy branch name">⎘</button>
       
+      <span class="stack-checks NORM">CHECKS</span>
+      <span class="stack-status primary">Needs review</span>
+      <span class="stack-time">TIME</span>
+    </div>
+    <div class="stack-row primary">
+      <a class="stack-link" href="https://app.graphite.com/github/pr/revefi/rcode/21160" target="_blank" rel="noopener">
+        <span class="stack-num">#21160</span>
+        <span class="stack-jira">[REV-13517][Part 4]</span>
+        <span class="stack-pr-title" title="Sticky footer on Configure Notification and Create API Token drawers">Sticky footer on Configure Notification and Create API Token drawers</span>
+        
+      </a>
+      <button class="pr-copy-branch" data-copy="" data-cmd="varunrev-13517_settings-drawers_4" title="Copy branch name: varunrev-13517_settings-drawers_4" aria-label="Copy branch name">⎘</button>
       
-      <span class="stack-status local" title="No GitHub PR yet — branch exists locally only. Run gt submit from the worktree to push.">📦 Local only</span>
+      <span class="stack-checks NORM">CHECKS</span>
+      <span class="stack-status primary">Needs review</span>
+      <span class="stack-time">TIME</span>
+    </div>
+    <div class="stack-row primary">
+      <a class="stack-link" href="https://app.graphite.com/github/pr/revefi/rcode/21159" target="_blank" rel="noopener">
+        <span class="stack-num">#21159</span>
+        <span class="stack-jira">[REV-13517][Part 3]</span>
+        <span class="stack-pr-title" title="Sticky footer on Acknowledge and Followup drawers">Sticky footer on Acknowledge and Followup drawers</span>
+        
+      </a>
+      <button class="pr-copy-branch" data-copy="" data-cmd="varunrev-13517_ticket-drawers_3" title="Copy branch name: varunrev-13517_ticket-drawers_3" aria-label="Copy branch name">⎘</button>
+      
+      <span class="stack-checks NORM">CHECKS</span>
+      <span class="stack-status primary">Needs review</span>
+      <span class="stack-time">TIME</span>
+    </div>
+    <div class="stack-row primary">
+      <a class="stack-link" href="https://app.graphite.com/github/pr/revefi/rcode/21158" target="_blank" rel="noopener">
+        <span class="stack-num">#21158</span>
+        <span class="stack-jira">[REV-13517][Part 2]</span>
+        <span class="stack-pr-title" title="Sticky footer on Edit Warehouse drawer">Sticky footer on Edit Warehouse drawer</span>
+        
+      </a>
+      <button class="pr-copy-branch" data-copy="" data-cmd="varunrev-13517_edit-warehouse-drawer_2" title="Copy branch name: varunrev-13517_edit-warehouse-drawer_2" aria-label="Copy branch name">⎘</button>
+      
+      <span class="stack-checks NORM">CHECKS</span>
+      <span class="stack-status primary">Needs review</span>
+      <span class="stack-time">TIME</span>
+    </div>
+    <div class="stack-row primary">
+      <a class="stack-link" href="https://app.graphite.com/github/pr/revefi/rcode/21157" target="_blank" rel="noopener">
+        <span class="stack-num">#21157</span>
+        <span class="stack-jira">[REV-13517][Part 1]</span>
+        <span class="stack-pr-title" title="Add footerActions slot to SideDrawer">Add footerActions slot to SideDrawer</span>
+        
+      </a>
+      <button class="pr-copy-branch" data-copy="" data-cmd="varunrev-13517-sticky-drawer-footer-1" title="Copy branch name: varunrev-13517-sticky-drawer-footer-1" aria-label="Copy branch name">⎘</button>
+      
+      <span class="stack-checks NORM">CHECKS</span>
+      <span class="stack-status primary">Needs review</span>
       <span class="stack-time">TIME</span>
     </div>
           
