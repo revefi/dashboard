@@ -1,0 +1,101 @@
+/* === Jira chips on stack cards === */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+.chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--primary-bg);
+  color: var(--primary);
+  border-radius: 999px;
+  text-decoration: none;
+  font-weight: 500;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip:hover {
+  text-decoration: underline;
+}
+
+/* === Untouched Jira table === */
+table.jira {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+table.jira th {
+  text-align: left;
+  padding: 10px 14px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+table.jira td {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+table.jira td a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+table.jira td a:hover {
+  text-decoration: underline;
+}
+table.jira td a.jira-title {
+  color: var(--text);
+  font-weight: 500;
+}
+table.jira td a.jira-title:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+.type-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+.type-badge.bug {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.type-badge.task {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.remarks {
+  min-width: 200px;
+  max-width: 320px;
+  padding: 6px 8px;
+  border: 1px dashed transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: text;
+  outline: none;
+  min-height: 22px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.remarks:hover {
+  border-color: var(--border);
+}
+.remarks:focus-within {
+  border-color: var(--primary);
+  border-style: solid;
+  background: var(--bg);
+}

@@ -1,0 +1,131 @@
+/* === Sprint filter === */
+h2 .section-controls {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  margin-left: 12px;
+  color: var(--muted);
+}
+.sprint-select {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-left: 8px;
+}
+.sprint-select:hover {
+  border-color: var(--primary);
+}
+table.jira td.sprint-cell {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.jira td.stack-cell {
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.jira td.stack-cell.muted {
+  color: var(--muted);
+}
+table.jira td.state-cell {
+  white-space: nowrap;
+}
+
+/* State pills — coloured by Jira's statusCategory key. Click to open menu. */
+.state-pill {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: var(--code-bg);
+  color: var(--text);
+  white-space: nowrap;
+}
+.state-pill:hover:not(:disabled) {
+  filter: brightness(1.08);
+  border-color: currentColor;
+}
+.state-pill:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.state-pill.cat-new {
+  color: var(--muted);
+  background: var(--code-bg);
+}
+.state-pill.cat-indeterminate {
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+.state-pill.cat-done {
+  color: var(--success);
+  background: rgba(5, 150, 105, 0.1);
+  border-color: rgba(5, 150, 105, 0.4);
+}
+
+/* Floating popover anchored next to the clicked state pill. */
+.state-menu {
+  position: absolute;
+  z-index: 100;
+  min-width: 180px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.25);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.state-menu-head {
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.state-menu-item {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.state-menu-item:hover {
+  background: var(--code-bg);
+  border-color: var(--border);
+}
+.state-menu-item.cat-indeterminate {
+  color: var(--primary);
+}
+.state-menu-item.cat-done {
+  color: var(--success);
+}
+table.jira td.sprint-cell .sprint-active {
+  color: var(--success);
+  font-weight: 600;
+}
+table.jira td.sprint-cell .sprint-closed {
+  opacity: 0.6;
+}

@@ -1,0 +1,79 @@
+/* === Recommendations === */
+.recs-h {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.recs-meta {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+.recs-refresh-btn {
+  margin-left: auto;
+}
+.recs {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px 24px;
+  box-shadow: var(--shadow);
+  list-style: none;
+  margin: 0;
+  counter-reset: rec;
+}
+.recs li {
+  counter-increment: rec;
+  padding: 10px 0 10px 36px;
+  position: relative;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.recs li:last-child {
+  border-bottom: none;
+}
+.recs li::before {
+  content: counter(rec);
+  position: absolute;
+  left: 0;
+  top: 12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary-bg);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+.recs li.empty {
+  padding-left: 0;
+  font-style: italic;
+}
+.recs li.empty::before {
+  display: none;
+}
+.recs strong {
+  color: var(--text);
+}
+.recs a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+.recs a:hover {
+  text-decoration: underline;
+}
+.recs code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+  background: var(--code-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.recs.loading li.empty {
+  color: var(--primary);
+}

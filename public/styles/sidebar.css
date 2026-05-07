@@ -1,0 +1,77 @@
+/* === Sidebar jump nav === */
+.jump-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.jump-nav .nav-section {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  text-decoration: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+}
+.jump-nav .nav-section:hover {
+  background: var(--code-bg);
+  color: var(--text);
+}
+.jump-nav .nav-section.active {
+  color: var(--primary);
+}
+.jump-nav .nav-stack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 8px 0;
+  padding-left: 6px;
+  border-left: 2px solid var(--border);
+}
+.jump-nav .nav-stack-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jump-nav .nav-stack-item:hover {
+  background: var(--code-bg);
+  color: var(--primary);
+}
+.jump-nav .nav-stack-item.merged {
+  opacity: 0.65;
+}
+.jump-nav .nav-stack-num {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* === Section anchor offset (so sticky-nav scroll lands below header) === */
+section {
+  scroll-margin-top: 24px;
+}
+.stack-card {
+  scroll-margin-top: 24px;
+}
