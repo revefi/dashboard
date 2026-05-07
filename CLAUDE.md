@@ -43,10 +43,12 @@ for AI-shaped work (recommendations, stack name generation).
                            ▼
    ┌────────────────────────────────────────────────────┐
    │ server.js                                          │
-   │   /api/data            ← model JSON                │
-   │   /api/recommendations ← Claude-generated <li>s    │
-   │   /api/restack (POST)  ← gt restack + gt submit    │
-   │   /api/health          ← lightweight status        │
+   │   /api/data                ← model JSON            │
+   │   /api/recommendations     ← Claude-generated <li>s│
+   │   /api/restack (POST)      ← gt restack + gt submit│
+   │   /api/jira/transitions    ← list valid transitions│
+   │   /api/jira/transition POST ← perform a transition │
+   │   /api/health              ← lightweight status    │
    │   /  /styles.css /app.js /marked.min.js /favicon   │
    └─────────┬────────────────────────────────────────┬─┘
              │ shells out to                          │ writes to
@@ -76,7 +78,8 @@ Sections, in order, separated by `// ----------` banner comments:
 | **trunk freshness** | `fetchOriginMain` (read-only `git fetch origin main`), `fetchStackBehind(branch)` (per-stack count of commits ahead of the stack's fork point on origin/main), `checkRestackConflicts(branch)` (in-memory 3-way merge via `git merge-tree --write-tree`; returns clean/conflicts list/null) |
 | **restack action** | `restackStack(stackKey)` — guarded `gt restack` + `gt submit --stack -u` in the stack's worktree; `isRebaseInProgress(wt)` (rebase-state probe); `readJson(req)` (POST-body parser) |
 | **Claude CLI** | `callClaude()`, `parseJsonLoose()`, disk-cache helpers |
-| **Jira** | `jiraGet/jiraPost`, `fetchJiraTickets`, `fetchOpenJiraTickets` (direct REST only — Claude/MCP fallback was removed once REST was stable) |
+| **Jira** | `jiraGet/jiraPost` (POST supports `expectEmpty: true` for the 204 no-body transitions endpoint), `fetchJiraTickets`, `fetchOpenJiraTickets`, `fetchJiraTransitions(key)`, `performJiraTransition(key, transitionId)` (direct REST only) |
+| **local-only branches** | `fetchLocalBranchMeta(branch)` synthesizes a PR-shaped object from `git log -1 --format=%s%n%cI` so worktree branches without a GitHub PR still render on the dashboard |
 | **session scoring** | `scoreSessionsForStack()` greps Claude session JSONLs (parallel `Promise.all`) |
 | **title parsing** | `parseTitle()` strips `[REV-XXXX][Part N]` prefix |
 | **model assembly** | `buildModel()` — the main pipeline |
@@ -91,22 +94,32 @@ Sections, in order, separated by `// ----------` banner comments:
 1. parallel fetch:  gt log + open PRs + recent merged PRs + worktrees
                     + `git fetch origin main --quiet` (read-only ref update)
 2. parse gt log → list of leaf-to-trunk chains
-3. for each chain:
-     partition into user_segment (your PRs)
+3. pre-detect "fully merged" branches — for every branch that has a
+   worktree but no open PR and no recent-merged record, `git rev-list
+   --count <branch> ^origin/main`. Result drives partitioning so that
+   freshly-merged worktree branches don't masquerade as local-only stacks.
+4. for each chain:
+     partition into user_segment (your PRs, including local-only worktree
+                                  branches that aren't fully merged)
                   + upstream_segment (parent PRs by others)
-4. fetch upstream PR metadata (gh pr view per branch, parallel)
-5. fetch review-thread counts + CI check rollups (one bulk GraphQL query,
-   aliased fields per PR — `fetchPrSignalsBulk`)
-6. kick off session scoring for ALL stacks in parallel up front
+5. fill synthetic `pr` for local-only branches (`fetchLocalBranchMeta`,
+   parallel)
+6. fetch upstream PR metadata (gh pr view per branch, parallel)
+7. fetch review-thread counts + CI check rollups (one bulk GraphQL query,
+   aliased fields per PR — `fetchPrSignalsBulk`). Local-only branches are
+   skipped because they don't have PR numbers.
+8. kick off session scoring for ALL stacks in parallel up front
    + per-stack `fetchStackBehind` (merge-base + rev-list) in parallel
    + per-stack `checkRestackConflicts` (merge-tree probe) in parallel
-7. build PR objects per stack (await each pre-launched scoring/behind/conflict promise)
-8. enhanceStackNamesWithClaude() — bulk Claude call for any stack
+9. build PR objects per stack (await each pre-launched scoring/behind/conflict promise)
+10. enhanceStackNamesWithClaude() — bulk Claude call for any stack
                                     whose PR-set hash isn't cached
-9. detect stale worktrees (parallel Promise.all over worktrees)
-10. fetch Jira tickets bulk (chip summaries) via direct REST
-11. fetch open Jira list (untouched section)
-12. assemble final model object
+11. detect stale worktrees (parallel Promise.all over worktrees)
+12. fetch Jira tickets bulk (chip summaries) via direct REST
+13. fetch all assigned-to-me Jira tickets, attach `stack` reference for any
+    that already belong to an open stack (the UI's `untouched_jira` wire
+    field — name kept for compat; the section is now just "Jira")
+14. assemble final model object
 ```
 
 Every step that touches I/O is parallelized — see "Performance notes".
@@ -134,10 +147,25 @@ A "stack" object on the wire looks like:
 }
 
 Pr = {
-  num, url, branch, title, jira_tag, part_tag,
-  is_draft, decision, status_label, status_class,
+  num,                        // null for is_local: true
+  url,                        // null for is_local: true
+  branch, title, jira_tag, part_tag,
+  is_draft, is_local,         // is_local = worktree exists, no GitHub PR yet
+  decision, status_label, status_class,
   human_comments, bot_comments, updated_label, needs_restack,
-  checks: null | { state, failing: [name], running, total }, // null on drafts
+  checks: null | { state, failing: [name], running, total }, // null on drafts and local-only
+}
+```
+
+The Jira tickets list (wire field `untouched_jira` — historical name) carries:
+
+```js
+{
+  rank, key, url, type, summary, priority, updated, updated_label, note,
+  sprint: null | { id, name, state, start_date, end_date },
+  status: "In Progress",
+  status_category: "new" | "indeterminate" | "done",
+  stack: null | { stack_key, name },  // populated when the ticket is on an open stack
 }
 ```
 
@@ -176,15 +204,16 @@ anyone else pushed to the branch since our last fetch.
 | `cache/stack-names.json` | disk | 30 days, but key includes sorted PR-set hash so it auto-busts when a stack's PRs change | 🧠 Intelligent click clears the file |
 | `cache/recommendations.json` | disk | forever | ⟳ Generate or 🧠 Intelligent click |
 
-Jira tickets and the Untouched Jira list are NOT cached on disk — direct REST
-is fast enough (~50ms per ticket, <200ms for the bulk search) that every plain
-↻ Refresh fetches them fresh.
+Jira tickets and the assigned-tickets list are NOT cached on disk — direct
+REST is fast enough (~50ms per ticket, <200ms for the bulk search) that every
+plain ↻ Refresh fetches them fresh. `POST /api/jira/transition` busts
+`cache.data` on success so the new status surfaces immediately.
 
 ### Refresh modes
 
 | User action | What gets refetched | Claude calls? |
 | --- | --- | --- |
-| ↻ Refresh / Auto (10m) | gh, gt, git, Jira REST | none (uses cached stack-names + recs) |
+| ↻ Refresh / Auto (configurable: 1/5/10/30 min) | gh, gt, git, Jira REST | none (uses cached stack-names + recs) |
 | 🧠 Intelligent | All of the above + wipes stack-names cache + regenerates recommendations | yes (stack names + recs) |
 | ⟳ Generate (in Action items section) | Just the action items | yes (recs only) |
 
@@ -272,16 +301,16 @@ initNotepad()         ─────────────────→ wir
 `wireDelegates()` runs after every render and is idempotent. Each loop uses
 its OWN flag (e.g. `_jumpWired`, `_copyWired`, `_actionWired`,
 `_stopToggleWired`, `_editNameWired`, `_toggleWired`, `_mdWired`,
-`_restackWired`). A shared `_wired` flag would collide when a single element
-matches multiple selectors (e.g. the stack-name pencil has both
-`data-stop-toggle` and `data-edit-name`).
+`_restackWired`, `_statePillWired`). A shared `_wired` flag would collide
+when a single element matches multiple selectors (e.g. the stack-name pencil
+has both `data-stop-toggle` and `data-edit-name`).
 
 It attaches:
 - `click` on `[data-toggle-card]` (card collapse toggle)
 - `click` on `[data-jump]` (sidebar nav, expands target card before scrolling)
 - `paste` / `blur` / `keydown` on `.stack-remarks` and `.remarks` (markdown
   rich text via `wireMarkdownRemarks`)
-- Per-row jira working-today checkbox + remarks
+- Per-Jira-row remarks
 - `click` + propagation-stop on `[data-copy]` (copy commands)
 - `click` on `[data-action="complete"]` / `[data-action="restore"]`
 - `click`+`mousedown`+keydown stop on `[data-stop-toggle]` (defensive — keeps
@@ -291,6 +320,9 @@ It attaches:
 - `click` on `[data-restack-stack]` (trunk-row Restack button → confirm dialog
   → POST `/api/restack` → spinner → on success refresh data, on error
   surface server message via `alert()`)
+- `click` on `[data-state-pill]` (Jira state pill → fetch valid transitions
+  from `/api/jira/transitions` → render popover → on selection POST to
+  `/api/jira/transition` with optimistic UI update; reverts on failure)
 
 ### localStorage keys
 
@@ -303,10 +335,11 @@ All under the `dashboard.*` namespace:
 | `dashboard.remarks.jira.<key>` | Per-Jira-ticket remarks (markdown) |
 | `dashboard.notepad` | Right-side scratchpad content (markdown) |
 | `dashboard.stack_name_override.<stack_key>` | User's manual rename of a stack |
-| `dashboard.working.YYYY-MM-DD.<key>` | Per-day "working today" toggle |
 | `dashboard.lastIntelligentTs` | ms-since-epoch of last 🧠 click |
-| `dashboard.sprint_filter` | "current" / "all" / "none" / `<sprintId>` |
-| `dashboard.notepad_hidden` | "1" if the right-side notepad column is hidden |
+| `dashboard.sprint_filter` | `"current"` / `"all"` / `"none"` / `<sprintId>` |
+| `dashboard.stack_filter` | `"without_stack"` / `"with_stack"` / `"all"` (Jira-table stack-presence filter) |
+| `dashboard.notepad_hidden` | `"1"` if the right-side notepad column is hidden |
+| `dashboard.auto_refresh_ms` | Selected auto-refresh interval in ms (60000/300000/600000/1800000) |
 
 ## Adding features
 
@@ -466,6 +499,25 @@ checks — ~28s baseline.
     `summarizeChecks` deduplicates by name (latest by `startedAt` /
     `createdAt`) and computes its own state from the surviving runs.
 
+16. **Graphite-squashed PRs leave `mergedAt: null` on GitHub.** The PR is
+    CLOSED but our `fetchRecentMergedPRs` filters with `merged_at != null`,
+    so it misses these. Without an extra check, a freshly-merged worktree
+    branch would slip through the `branchToOpenPR` and `branchToMergedPR`
+    lookups, hit the `wt` arm of the partitioning, and show up as a
+    "Local only" stack — even though it's actually done. The pre-detect
+    step in `buildModel` runs `git rev-list --count <branch> ^origin/main`
+    for every local-only candidate; branches with 0 unique commits vs
+    origin/main are excluded from the user segment. They appear in the
+    stale-worktree section instead, which is the right cleanup cue.
+
+17. **Local-only stacks have `pr.number === null`.** When a branch has a
+    worktree but no GitHub PR yet, `fetchLocalBranchMeta` synthesizes a
+    PR-shaped object with `isLocal: true`, `number: null`, and the title
+    pulled from the latest commit subject via `git log`. Downstream code
+    that expects a PR number (bulk GraphQL fetch, the graphite URL
+    template) explicitly skips or guards against null. The frontend
+    renders `📦 Local only` instead of the review/CI status pills.
+
 ## Operations
 
 - Server runs under launchd. Plist: `~/Library/LaunchAgents/com.<you>.dashboard.plist`.
@@ -491,9 +543,9 @@ no full zshrc source, so oh-my-zsh side effects are avoided):
 - `ATLASSIAN_API_TOKEN` — optional. Get one at
   https://id.atlassian.com/manage-profile/security/api-tokens.
 
-Without the Atlassian pair the dashboard still works — the Untouched Jira
-section and stack-card chip summaries just don't populate (the UI shows a
-"Jira not configured" hint).
+Without the Atlassian pair the dashboard still works — the Jira section and
+stack-card chip summaries just don't populate (the UI shows a "Jira not
+configured" hint).
 
 `MAIN_SESSIONS_DIR` is derived from `WORKSPACE_PATH` via `encodeProjectDir`,
 which mirrors how the `claude` CLI names project dirs under

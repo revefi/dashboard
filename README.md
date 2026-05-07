@@ -2,8 +2,8 @@
 
 A self-updating PR/stack dashboard for your daily Revefi workflow. Watches your
 open Graphite stacks, GitHub PRs, CI checks, Jira tickets, stale worktrees, and
-Claude sessions — refreshes every 10 minutes (or on demand) without burning
-Claude tokens.
+Claude sessions — auto-refreshes on a configurable interval (1/5/10/30 min, or
+off) without burning Claude tokens.
 
 Runs as a tiny local web server. Open <http://localhost:7787> in any browser.
 
@@ -40,7 +40,7 @@ Add these to `~/.zshrc` (or your shell init file):
 # Absolute path to your rcode checkout — wherever you cloned it.
 export WORKSPACE_PATH=/path/to/your/rcode
 
-# Atlassian credentials — power the Untouched Jira section, per-stack
+# Atlassian credentials — power the Jira section, per-stack
 # Jira chips, and ticket-title context. Get a token at
 # https://id.atlassian.com/manage-profile/security/api-tokens.
 export ATLASSIAN_EMAIL="you@revefi.com"
@@ -132,27 +132,49 @@ comments → ready to merge → blocked → awaiting review).
   priority over Claude-generated names, reflected in the sidebar nav.
 - **Mark complete** moves the card to "Merged stacks" with a `git worktree
   remove` copy button.
+- **Local-only stacks** — branches that have a worktree and local commits but
+  no GitHub PR yet are surfaced with a `📦 Local only` pill (synthesized from
+  the latest commit subject via `git log`). Tooltip prompts you to `gt
+  submit`. Branches that are fully merged into `origin/main` (e.g. after a
+  Graphite squash) are filtered out so they don't keep cluttering the active
+  list — they appear in the **Stale worktrees** section instead.
 
-### Untouched Jira
+### Jira
 
-Tickets assigned to you that aren't attached to any open stack — the queue of
-"things to start next."
+Every Jira ticket assigned to you, with a per-stack link when the ticket is
+already attached to an open PR stack. Default view hides tickets that have a
+stack — switch the Stack filter to see all of them.
 
-- **Sprint filter dropdown** — defaults to "Current sprint" (most-active
-  sprint, active state preferred). Switchable to All / No sprint / individual
-  sprints.
-- Per-row "working today" toggle, markdown remarks, type badge, sprint cell.
-- **Remarks migration** — if you wrote a note for `REV-XXXX` in this table and
-  later open a PR stack tagged with that key, the note migrates into the
-  stack's Remarks (with a `↳ from REV-XXXX` annotation).
+- **State column** — coloured pill driven by Jira's status category.
+  **Click the pill** to open a popover of valid transitions (fetched live
+  from Jira) and move the ticket inline. UI updates optimistically; reverts
+  with an alert if Jira rejects the transition.
+- **Stack column** — clickable link that scrolls to the matching stack card,
+  or `—` if the ticket has no stack yet.
+- **Stack filter** (`Without stack` / `With stack` / `All`) alongside the
+  sprint filter. Default `Without stack` preserves the original "things to
+  start next" queue behavior.
+- **Sprint filter** — defaults to "Current sprint" (the sprint with the most
+  tickets in active state). Switchable to All / No sprint / individual sprints.
+- **Sort order** — by state actionability (In Review → In Progress → Blocked
+  → To Do → Backlog), then most-recently-updated first.
+- **Remarks** — per-row markdown notes. If you write a note here for
+  `REV-XXXX` and later open a PR stack tagged with that key, the note
+  migrates into the stack's Remarks with a `↳ from REV-XXXX` annotation.
 
 ### Refresh model
 
 | Trigger | What refreshes | Uses Claude? |
 | --- | --- | --- |
-| **↻ Refresh** / Auto (10m) | gh, gt, git, Jira REST | no |
-| **🧠 Intelligent** | All of the above + wipes stack-name cache + regenerates recommendations | yes |
+| **↻ Refresh** / Auto (configurable: 1/5/10/30 min) | gh, gt, git, Jira REST | no |
+| **🧠 Intelligent** | All of the above + wipes stack-name cache + regenerates action items | yes |
 | **⟳ Generate** in the Action items section | Just the action items | yes |
+
+The header's auto-refresh interval is a dropdown next to the Auto checkbox;
+the selected value persists in localStorage. The dashboard also fires an
+extra refresh the moment the tab regains focus if it's been hidden longer
+than the interval — fixes a real Chrome quirk where `setInterval` is heavily
+throttled in background tabs.
 
 The two timestamps in the header (`· Ns ago`, `· intel Nm ago`) tell you how
 stale each side is.
@@ -192,7 +214,7 @@ the main column scrolls.
 │  · jump  │   · stat summary                        │  · markdown │
 │    nav   │   · active stacks                       │    scratch  │
 │  · stack │   · merged stacks                       │    pad      │
-│    list  │   · untouched Jira (sprint-filtered)    │             │
+│    list  │   · jira (sprint + stack filters)       │             │
 │          │   · stale worktrees                     │             │
 │          │   · action items                        │             │
 └──────────┴─────────────────────────────────────────┴─────────────┘
@@ -208,9 +230,11 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
 
 | Method + path | Purpose |
 | --- | --- |
-| `GET /api/data` | The full dashboard model — stacks, untouched Jira, stale worktrees, totals. Server-cached for 30s. `?refresh=1` forces. `?intelligent=1` also wipes Claude-backed disk caches. |
-| `GET /api/recommendations` | Claude-generated recommendation list (HTML `<li>`s). Disk-persisted indefinitely. `?refresh=1` regenerates. |
+| `GET /api/data` | The full dashboard model — stacks, jira tickets, stale worktrees, totals. Server-cached for 30s. `?refresh=1` forces. `?intelligent=1` also wipes Claude-backed disk caches. |
+| `GET /api/recommendations` | Claude-generated action-item list (HTML `<li>`s). Disk-persisted indefinitely. `?refresh=1` regenerates. |
 | `POST /api/restack` | One-click restack handler. Body: `{ stack_key }`. Runs `gt restack` + `gt submit --stack -u` in the stack's worktree. Refuses on dirty trees, predicted conflicts, upstream-PR stacks, or up-to-date stacks. |
+| `GET /api/jira/transitions?key=REV-XXXX` | Lists valid transitions for a Jira ticket (proxies to Atlassian). Used by the State pill popover. |
+| `POST /api/jira/transition` | Body: `{ key, transition_id }`. Performs the transition and busts the data cache so the next refresh reflects the new status. |
 | `GET /api/health` | Lightweight status — cache age, recs cache state, Jira-configured flag. |
 | `GET /` + static | Serves `public/` — index, app.js, styles, `marked.min.js`, favicon. |
 
@@ -227,8 +251,13 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
 - `git worktree list --porcelain` — worktrees
 - `git fetch origin main --quiet` + `git rev-list --count` — per-stack
   "behind origin/main" measurement (read-only; never modifies branches)
+- `git rev-list --count <branch> ^origin/main` — per-worktree-branch check
+  for whether the branch is fully merged into main (catches Graphite-squashed
+  branches that GitHub leaves with `mergedAt: null`)
 - `git merge-tree --write-tree --name-only` — per-stack conflict prediction
   (read-only; writes loose objects, no refs)
+- `git log <branch> --format=%s%n%cI -n1` — title + timestamp for local-only
+  branches that don't have a GitHub PR yet
 - `~/.claude/projects/.../.jsonl` — session files (parallel grep-scored per
   stack)
 - `revefi.atlassian.net/rest/api/3/...` — Jira tickets and search via REST
@@ -245,9 +274,10 @@ plus a few `gh` subprocess spawns.
 | Stack names | disk, keyed by stack's sorted PR-set hash (auto-busts on PR change) | **🧠 Intelligent** click |
 | `/api/recommendations` | disk, no expiry | **⟳ Generate** click |
 
-Jira tickets and the Untouched Jira list have **no cache** — every plain
-↻ Refresh fetches them fresh via direct REST (~50ms per ticket, ~200ms for
-the search).
+Jira ticket details and the assigned-tickets list have **no cache** — every
+plain ↻ Refresh fetches them fresh via direct REST (~50ms per ticket, ~200ms
+for the search). The `POST /api/jira/transition` endpoint also busts
+`/api/data`'s 30s cache on success so the new status surfaces immediately.
 
 ### Codebase guide
 
