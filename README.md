@@ -20,7 +20,7 @@ node --version    # v22+ recommended (anything ≥ 18 works)
 git --version     # 2.38+ — needed for merge-tree --write-tree
 gh --version      # GitHub CLI, authenticated to revefi/rcode
 gt --version      # Graphite CLI
-claude --version  # optional — only used by 🧠 Intelligent + ⟳ Generate buttons
+claude --version  # optional — only used by ✨ Intelligent + ⟳ Generate buttons
 ```
 
 Quick sanity check that the CLIs can reach the things the dashboard polls:
@@ -167,7 +167,7 @@ stack — switch the Stack filter to see all of them.
 | Trigger | What refreshes | Uses Claude? |
 | --- | --- | --- |
 | **↻ Refresh** / Auto (configurable: 1/5/10/30 min) | gh, gt, git, Jira REST | no |
-| **🧠 Intelligent** | All of the above + wipes stack-name cache + regenerates action items | yes |
+| **✨ Intelligent** | All of the above + wipes stack-name cache + regenerates action items | yes |
 | **⟳ Generate** in the Action items section | Just the action items | yes |
 
 The header's auto-refresh interval is a dropdown next to the Auto checkbox;
@@ -201,7 +201,7 @@ stale each side is.
 - **Theme toggle** in the header cycles **Auto → Light → Dark**. "Auto"
   follows the OS `prefers-color-scheme`; pick a side to override and
   it's remembered (per browser).
-- **Refresh-time progress fill** on the ↻ Refresh and 🧠 Intelligent
+- **Refresh-time progress fill** on the ↻ Refresh and ✨ Intelligent
   buttons. After the dashboard has seen 5 successful refreshes it
   estimates the median duration; the button background fills
   left-to-right as the next refresh runs. If it goes long, the fill
@@ -216,7 +216,7 @@ the main column scrolls.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  header  (title · ↻ Refresh · Auto · 🧠 Intelligent · timestamps)│ ← sticky
+│  header  (title · ↻ Refresh · Auto · ✨ Intelligent · timestamps)│ ← sticky
 ├──────────┬─────────────────────────────────────────┬─────────────┤
 │ sidebar  │  main column                            │ notepad     │
 │  · jump  │   · stat summary                        │  · markdown │
@@ -269,7 +269,7 @@ Responsive: notepad drops at ≤1280px, sidebar drops at ≤900px (mobile).
 - `~/.claude/projects/.../.jsonl` — session files (parallel grep-scored per
   stack)
 - `revefi.atlassian.net/rest/api/3/...` — Jira tickets and search via REST
-- `claude -p` — recommendations + stack name generation (only on 🧠 / ⟳ clicks)
+- `claude -p` — recommendations + stack name generation (only on ✨ / ⟳ clicks)
 
 Plain refresh ≈ 8s end-to-end. Most of that is GitHub's GraphQL response time
 plus a few `gh` subprocess spawns.
@@ -279,7 +279,7 @@ plus a few `gh` subprocess spawns.
 | Data | TTL | Invalidation |
 | --- | --- | --- |
 | `/api/data` | 30s in-memory | header **↻ Refresh** or auto-refresh tick |
-| Stack names | disk, keyed by stack's sorted PR-set hash (auto-busts on PR change) | **🧠 Intelligent** click |
+| Stack names | disk, keyed by stack's sorted PR-set hash (auto-busts on PR change) | **✨ Intelligent** click |
 | `/api/recommendations` | disk, no expiry | **⟳ Generate** click |
 
 Jira ticket details and the assigned-tickets list have **no cache** — every

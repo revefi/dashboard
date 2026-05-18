@@ -28,7 +28,7 @@ const MODE_KEYS = {
 };
 
 // rafId keyed by button.id so two simultaneous tickers (refresh-btn +
-// recs-refresh-btn during 🧠 Intelligent) don't trample each other.
+// recs-refresh-btn during ✨ Intelligent) don't trample each other.
 const active = new Map();
 // Pending completion-animation teardown timers, keyed by button.id. Lets
 // a fresh startRefreshProgress() cancel a still-fading completion from

@@ -242,8 +242,8 @@ anyone else pushed to the branch since our last fetch.
 | Cache | Where | TTL | Invalidation |
 | --- | --- | --- | --- |
 | `cache.data` | in-memory | 30s | `?refresh=1` query param |
-| `cache/stack-names.json` | disk | 30 days, but key includes sorted PR-set hash so it auto-busts when a stack's PRs change | 🧠 Intelligent click clears the file |
-| `cache/recommendations.json` | disk | forever | ⟳ Generate or 🧠 Intelligent click |
+| `cache/stack-names.json` | disk | 30 days, but key includes sorted PR-set hash so it auto-busts when a stack's PRs change | ✨ Intelligent click clears the file |
+| `cache/recommendations.json` | disk | forever | ⟳ Generate or ✨ Intelligent click |
 
 Jira tickets and the assigned-tickets list are NOT cached on disk — direct
 REST is fast enough (~50ms per ticket, <200ms for the bulk search) that every
@@ -255,7 +255,7 @@ plain ↻ Refresh fetches them fresh. `POST /api/jira/transition` busts
 | User action | What gets refetched | Claude calls? |
 | --- | --- | --- |
 | ↻ Refresh / Auto (configurable: 1/5/10/30 min) | gh, gt, git, Jira REST | none (uses cached stack-names + recs) |
-| 🧠 Intelligent | All of the above + wipes stack-names cache + regenerates recommendations | yes (stack names + recs) |
+| ✨ Intelligent | All of the above + wipes stack-names cache + regenerates recommendations | yes (stack names + recs) |
 | ⟳ Generate (in Action items section) | Just the action items | yes (recs only) |
 
 ## Frontend (`public/`)
@@ -396,14 +396,14 @@ All under the `dashboard.*` namespace:
 | `dashboard.remarks.jira.<key>` | Per-Jira-ticket remarks (markdown) |
 | `dashboard.notepad` | Right-side scratchpad content (markdown) |
 | `dashboard.stack_name_override.<stack_key>` | User's manual rename of a stack |
-| `dashboard.lastIntelligentTs` | ms-since-epoch of last 🧠 click |
+| `dashboard.lastIntelligentTs` | ms-since-epoch of last ✨ click |
 | `dashboard.sprint_filter` | `"current"` / `"all"` / `"none"` / `<sprintId>` |
 | `dashboard.stack_filter` | `"without_stack"` / `"with_stack"` / `"all"` (Jira-table stack-presence filter) |
 | `dashboard.notepad_hidden` | `"1"` if the right-side notepad column is hidden |
 | `dashboard.auto_refresh_ms` | Selected auto-refresh interval in ms (60000/300000/600000/1800000) |
 | `dashboard.theme` | `"light"` or `"dark"` if the user picked one. Absent = follow OS via `prefers-color-scheme`. |
 | `dashboard.refresh_timings_ms` | JSON array of recent `/api/data` durations in ms (rolling window of 50). Drives the progress fill on the ↻ Refresh button after ≥5 samples accumulate. |
-| `dashboard.recs_timings_ms` | Same shape, for `/api/recommendations` (force=true only — cached reads aren't measured). Drives progress on the ⟳ Generate / 🧠 Intelligent buttons. |
+| `dashboard.recs_timings_ms` | Same shape, for `/api/recommendations` (force=true only — cached reads aren't measured). Drives progress on the ⟳ Generate / ✨ Intelligent buttons. |
 
 ## Adding features
 

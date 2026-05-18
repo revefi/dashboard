@@ -78,7 +78,7 @@ header.top {
   cursor: wait;
 }
 /* Lock the width of the two buttons whose labels swap between idle ("↻
-   Refresh", "🧠 Intelligent") and loading ("↻ Refreshing", "🧠 Thinking")
+   Refresh", "✨ Intelligent") and loading ("↻ Refreshing", "✨ Thinking")
    states. Without these, the row visibly jumps every time a refresh
    starts or finishes. min-width covers the widest possible label per
    button at the current font-size; box-sizing: border-box (set globally
@@ -86,7 +86,7 @@ header.top {
 #refresh-btn {
   min-width: 110px;
 }
-/* Slightly tighter padding on the 🧠 button so the wider "Intelligent"
+/* Slightly tighter padding on the ✨ button so the wider "Intelligent"
    label doesn't make it visibly heavier than its neighbours. */
 #refresh-intelligent-btn {
   padding: 6px 8px;

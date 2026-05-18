@@ -39,7 +39,7 @@ export function fetchData(force = false, intelligent = false) {
 
   const idle = idleLabelFor(btn);
   btn.classList.add("loading");
-  btn.textContent = intelligent ? "🧠 Thinking" : "↻ Refreshing";
+  btn.textContent = intelligent ? "✨ Thinking" : "↻ Refreshing";
   startRefreshProgress(btn, "data");
 
   const ctrl = new AbortController();
