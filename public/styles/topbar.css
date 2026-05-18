@@ -62,14 +62,46 @@ header.top {
   font-size: 13px;
   cursor: pointer;
   font-family: inherit;
+  /* position + overflow contains the ::before progress fill within the
+     button's rounded corners; isolation creates a stacking context so the
+     fill's z-index: -1 stays below the button text but above the button's
+     own background. */
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
 }
 .refresh-btn:hover {
   border-color: var(--primary);
   color: var(--primary);
 }
 .refresh-btn.loading {
-  opacity: 0.6;
   cursor: wait;
+}
+/* Background tint fill driven by --refresh-progress (0..1), written by
+   public/app/progress.js while a refresh is in flight. After ≥5 recorded
+   refresh durations, the fill grows roughly in lockstep with elapsed time.
+   With fewer samples, --refresh-progress stays unset → 0% width → no fill. */
+.refresh-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% * var(--refresh-progress, 0));
+  background: var(--primary-bg);
+  transition: width 0.12s linear;
+  pointer-events: none;
+  z-index: -1;
+}
+/* Once elapsed has caught up to the median estimate, hold the fill at 100%
+   and pulse opacity so the user sees we're past the typical duration but
+   still working — common pattern for indeterminate "going long" states. */
+@keyframes refresh-progress-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 1; }
+}
+.refresh-btn.progress-pulse::before {
+  animation: refresh-progress-pulse 1.2s ease-in-out infinite;
 }
 .refresh-btn-intelligent {
   border-color: var(--info);

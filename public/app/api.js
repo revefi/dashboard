@@ -3,9 +3,15 @@
 
 import { $, esc } from "./dom.js";
 import { store } from "./store.js";
-import { LAST_INTEL_KEY } from "./storage.js";
+import {
+  LAST_INTEL_KEY,
+  REFRESH_TIMINGS_KEY,
+  RECS_TIMINGS_KEY,
+  pushTiming,
+} from "./storage.js";
 import { render } from "./render.js";
 import { updateFreshness } from "./refresh.js";
+import { startRefreshProgress, stopRefreshProgress } from "./progress.js";
 
 // Each refresh button has a stable "idle" label set in index.html. We snapshot
 // it once on first use so concurrent fetches can't capture a mid-flight
@@ -34,6 +40,7 @@ export function fetchData(force = false, intelligent = false) {
   const idle = idleLabelFor(btn);
   btn.classList.add("loading");
   btn.textContent = intelligent ? "🧠 Thinking…" : "↻ Refreshing…";
+  startRefreshProgress(btn, "data");
 
   const ctrl = new AbortController();
   const timeoutId = setTimeout(
@@ -41,6 +48,7 @@ export function fetchData(force = false, intelligent = false) {
     FETCH_TIMEOUT_MS
   );
 
+  const t0 = performance.now();
   const promise = (async () => {
     try {
       const params = new URLSearchParams();
@@ -59,6 +67,8 @@ export function fetchData(force = false, intelligent = false) {
       render(data);
       $("#error-banner").style.display = "none";
       updateFreshness();
+      // Only successful refreshes contribute to the duration estimate.
+      pushTiming(REFRESH_TIMINGS_KEY, performance.now() - t0);
     } catch (err) {
       $("#error-banner").style.display = "";
       $(
@@ -66,6 +76,7 @@ export function fetchData(force = false, intelligent = false) {
       ).textContent = `Error: ${err.message}\n\nTry: refreshing, ensuring \`gh\` and \`gt\` are authenticated, or restarting the server.`;
     } finally {
       clearTimeout(timeoutId);
+      stopRefreshProgress(btn);
       btn.classList.remove("loading");
       btn.textContent = idle;
       inFlight.delete(btn.id);
@@ -85,11 +96,13 @@ export async function fetchRecs(force = false) {
   if (existing) return existing;
   btn.classList.add("loading");
   btn.disabled = true;
+  startRefreshProgress(btn, "recs");
   if (force) {
     list.classList.add("loading");
     list.innerHTML =
       '<li class="empty muted">Generating action items… this can take 10–30s.</li>';
   }
+  const t0 = performance.now();
   const promise = (async () => {
     try {
       const url = force
@@ -103,12 +116,17 @@ export async function fetchRecs(force = false) {
       const recs = await res.json();
       const { renderRecs } = await import("./render.js");
       renderRecs(recs);
+      // Only the force=true path actually hits Claude — measuring the
+      // cached read would pull the median to near-zero and make the
+      // progress bar fly through. Skip cached reads.
+      if (force) pushTiming(RECS_TIMINGS_KEY, performance.now() - t0);
     } catch (err) {
       list.classList.remove("loading");
       list.innerHTML = `<li class="empty" style="color:var(--danger);font-style:normal">Error: ${esc(
         err.message
       )}</li>`;
     } finally {
+      stopRefreshProgress(btn);
       btn.classList.remove("loading");
       btn.disabled = false;
       inFlight.delete(btn.id);

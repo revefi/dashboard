@@ -13,6 +13,44 @@ export const NOTEPAD_HIDDEN_KEY = "dashboard.notepad_hidden";
 export const LAST_INTEL_KEY = "dashboard.lastIntelligentTs";
 // Theme override: "light" or "dark" forces, absence means follow OS.
 export const THEME_KEY = "dashboard.theme";
+// Rolling history of recent refresh durations (ms). Two arrays so the data
+// vs recs distributions don't cross-contaminate. Used by progress.js to
+// estimate "how long until done" for the fill indicator on the refresh
+// buttons.
+export const REFRESH_TIMINGS_KEY = "dashboard.refresh_timings_ms";
+export const RECS_TIMINGS_KEY = "dashboard.recs_timings_ms";
+
+const TIMINGS_MAX = 50;
+const TIMINGS_MIN_SAMPLES = 5;
+
+function readTimings(key) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(raw) ? raw.filter((n) => Number.isFinite(n)) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function pushTiming(key, ms) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  const arr = readTimings(key);
+  arr.push(Math.round(ms));
+  while (arr.length > TIMINGS_MAX) arr.shift();
+  localStorage.setItem(key, JSON.stringify(arr));
+}
+
+// Median over the stored window. Returns null until we have enough samples
+// — the progress indicator stays off (just the loading label) until then.
+export function medianTiming(key) {
+  const arr = readTimings(key);
+  if (arr.length < TIMINGS_MIN_SAMPLES) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const m = sorted.length;
+  return m % 2 === 1
+    ? sorted[(m - 1) / 2]
+    : Math.round((sorted[m / 2 - 1] + sorted[m / 2]) / 2);
+}
 
 const DEFAULT_AUTO_REFRESH_MS = 600_000; // 10 minutes
 
