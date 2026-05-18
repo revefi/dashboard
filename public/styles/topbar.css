@@ -115,6 +115,27 @@ header.top {
 .refresh-btn.progress-pulse::before {
   animation: refresh-progress-pulse 1.2s ease-in-out infinite;
 }
+
+/* On a successful refresh, the bar runs to 100% (via --refresh-progress=1),
+   flashes the success tint briefly, then fades out. Replaces an abrupt
+   "snap back to 0" with a clear "done!" cue. */
+@keyframes refresh-progress-complete {
+  0% {
+    background: var(--success-bg);
+    opacity: 1;
+  }
+  55% {
+    background: var(--success-bg);
+    opacity: 1;
+  }
+  100% {
+    background: var(--success-bg);
+    opacity: 0;
+  }
+}
+.refresh-btn.progress-complete::before {
+  animation: refresh-progress-complete 600ms ease-out forwards;
+}
 .refresh-btn-intelligent {
   border-color: var(--info);
   color: var(--info);
