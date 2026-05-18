@@ -22,18 +22,26 @@ export const RECS_TIMINGS_KEY = "dashboard.recs_timings_ms";
 
 const TIMINGS_MAX = 50;
 const TIMINGS_MIN_SAMPLES = 5;
+// Anything faster than this is almost certainly a server-side cache hit
+// (in-memory cache TTL is 30s), not a real "what does refresh feel like"
+// data point. Including these pulls the median to near-zero and makes the
+// progress fill rocket through. Filter on both push and read so legacy
+// values already in localStorage don't poison the estimate either.
+const TIMINGS_FLOOR_MS = 200;
 
 function readTimings(key) {
   try {
     const raw = JSON.parse(localStorage.getItem(key) || "[]");
-    return Array.isArray(raw) ? raw.filter((n) => Number.isFinite(n)) : [];
+    return Array.isArray(raw)
+      ? raw.filter((n) => Number.isFinite(n) && n >= TIMINGS_FLOOR_MS)
+      : [];
   } catch {
     return [];
   }
 }
 
 export function pushTiming(key, ms) {
-  if (!Number.isFinite(ms) || ms < 0) return;
+  if (!Number.isFinite(ms) || ms < TIMINGS_FLOOR_MS) return;
   const arr = readTimings(key);
   arr.push(Math.round(ms));
   while (arr.length > TIMINGS_MAX) arr.shift();
