@@ -14,21 +14,22 @@ async function getLogin() {
 }
 
 async function fetchOpenPRs() {
-  // gh's --author filter returns 0 results when invoked under Node child_process for reasons
-  // I cannot pin down — works fine from interactive shell. Workaround: fetch all open PRs via
-  // gh pr list (no filter) and filter to my login client-side.
+  // Server-side filter via gh's search backend (`--search "is:open
+  // author:<login>"`). This was previously a client-side filter over an
+  // unfiltered `--limit 500` fetch — 10s+ on this repo with ~500 open PRs
+  // org-wide, mostly spent paging through everyone else's PRs. The search
+  // path returns ~30 user-owned PRs in ~1s.
   //
-  // --limit 500: gh sorts the result by createdAt desc, so a low limit drops *older* PRs
-  // first. With ~500 open PRs across the org, --limit 200 was clipping older user-owned
-  // PRs (e.g. the bottom of a long-running stack) and the partitioning logic then
-  // misclassified those lower branches as upstream by another author.
+  // History note: `--author "@me"` returns [] under Node child_process (gh
+  // CLI bug, see CLAUDE.md gotcha #1). `--search "author:<login>"` is a
+  // different code path inside gh that hits GitHub's search API and works
+  // fine non-interactively.
   const login = await getLogin();
   const stdout = await shRetry(
-    `gh pr list ${GH_REPO_FLAG} --state open --limit 500 ` +
+    `gh pr list ${GH_REPO_FLAG} --search "is:open author:${login}" --limit 200 ` +
       `--json number,title,url,isDraft,createdAt,updatedAt,headRefName,baseRefName,reviewDecision,author`
   );
-  const all = JSON.parse(stdout);
-  return all.filter((p) => p.author?.login === login);
+  return JSON.parse(stdout);
 }
 
 async function fetchRecentMergedPRs() {

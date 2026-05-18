@@ -103,8 +103,12 @@ async function scoreSessionsForStack(keywords, worktreeName) {
     for (const f of listSessions(dir)) targets.push({ ...f, dir });
   }
 
-  // Parallel grep across all session files. ~60 files in parallel run in well
-  // under a second on macOS; sequential awaits used to take seconds per stack.
+  // Parallel grep across all session files. ~60 files in parallel run in
+  // well under a second on macOS; sequential awaits used to take seconds
+  // per stack. Attempted batching to one grep per dir (single subprocess
+  // with all file args) ran 2-3x SLOWER in practice — cold-cache reads of
+  // each file are sequentialized within a single grep, whereas N parallel
+  // greps let the OS schedule the reads concurrently.
   const results = (
     await Promise.all(
       targets.map(async ({ sid, file, dir }) => {

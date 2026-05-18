@@ -9,11 +9,11 @@ const {
   parseGtLog,
   buildStacksFromGtLog,
   fetchWorktrees,
-  fetchOriginMain,
   fetchStackBehind,
   checkRestackConflicts,
   fetchLocalBranchMeta,
 } = require("./git");
+const { Timer, appendTimingRecord } = require("./timing");
 const {
   fetchOpenPRs,
   fetchRecentMergedPRs,
@@ -84,13 +84,64 @@ function deriveStatus(decision, isBottom, isUserPR) {
 }
 
 async function buildModel() {
-  const [gtLogText, openPRs, mergedPRs, worktrees] = await Promise.all([
-    sh("gt log short --no-interactive --classic"),
-    fetchOpenPRs(),
-    fetchRecentMergedPRs(),
-    fetchWorktrees(),
-    fetchOriginMain(),
-  ]);
+  const t = new Timer();
+
+  // Stage 1: cheap parallel fetches. `git fetch origin main` used to live
+  // here too — it now runs as a 5-min background tick from index.js so
+  // the manual-refresh path doesn't pay for it. behind-counts read
+  // whatever origin/main ref the background tick most recently pulled.
+  const [gtLogText, openPRs, mergedPRs, worktrees] = await t.time(
+    "initial_fetch",
+    () =>
+      Promise.all([
+        sh("gt log short --no-interactive --classic"),
+        fetchOpenPRs(),
+        fetchRecentMergedPRs(),
+        fetchWorktrees(),
+      ])
+  );
+
+  // Stage 2: kick off everything we *can* start with just openPRs +
+  // worktrees in hand. These all run in parallel with the rest of
+  // buildModel — we only await them at the very end before assembling
+  // the return value.
+  const prSignalsPromise = t.time("pr_signals", () =>
+    fetchPrSignalsBulk(openPRs.map((p) => p.number))
+  );
+
+  // Stale worktrees + open Jira are independent of anything stack-shaped.
+  // Pulling them out of the post-render block lets them overlap with the
+  // expensive `resumes` work below.
+  const activeBranchesEarly = new Set(openPRs.map((p) => p.headRefName));
+  const stalePromise = t.time("stale_worktrees", () =>
+    Promise.all(
+      worktrees.map(async (w) => {
+        if (activeBranchesEarly.has(w.branch)) return null;
+        const anyPR = await fetchAnyPR(w.branch);
+        if (anyPR) {
+          if (anyPR.state === "MERGED") {
+            return { ...w, reason: `PR #${anyPR.number} merged`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
+          }
+          if (anyPR.state === "CLOSED") {
+            return { ...w, reason: `PR #${anyPR.number} closed without merge`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
+          }
+          return null;
+        }
+        try {
+          const { stdout } = await execP(
+            `git -C '${w.path}' log main..HEAD --oneline | head -1`
+          );
+          if (!stdout.trim()) {
+            return { ...w, reason: "Branch fully merged into main (no unique commits)", pr_num: null, pr_url: null };
+          }
+        } catch {
+          // ignore — git error means we just don't classify this worktree as stale
+        }
+        return null;
+      })
+    )
+  );
+  const openJiraPromise = t.time("open_jira", () => fetchOpenJiraTickets());
 
   const parsedLines = parseGtLog(gtLogText);
   const rawStacks = buildStacksFromGtLog(parsedLines);
@@ -119,20 +170,22 @@ async function buildModel() {
     ),
   ];
   const fullyMergedBranches = new Set();
-  await Promise.all(
-    localCandidateBranches.map(async (branch) => {
-      try {
-        const { stdout } = await execP(
-          `git rev-list --count ${branch} ^origin/main`,
-          { cwd: REPO, maxBuffer: 1e6 }
-        );
-        const ahead = parseInt(stdout.trim(), 10) || 0;
-        if (ahead === 0) fullyMergedBranches.add(branch);
-      } catch {
-        // git error → leave it as a candidate; partitioning will treat it
-        // as local-only and the user can still see it.
-      }
-    })
+  await t.time("fully_merged_detect", () =>
+    Promise.all(
+      localCandidateBranches.map(async (branch) => {
+        try {
+          const { stdout } = await execP(
+            `git rev-list --count ${branch} ^origin/main`,
+            { cwd: REPO, maxBuffer: 1e6 }
+          );
+          const ahead = parseInt(stdout.trim(), 10) || 0;
+          if (ahead === 0) fullyMergedBranches.add(branch);
+        } catch {
+          // git error → leave it as a candidate; partitioning will treat it
+          // as local-only and the user can still see it.
+        }
+      })
+    )
   );
 
   // Partition each stack into user_segment (top, has user PRs) vs upstream_segment (below).
@@ -174,52 +227,51 @@ async function buildModel() {
     enrichedStacks.push({ userBranches, upstreamBranches, allBranches: chain });
   }
 
-  // Fill in synthetic `pr` for local-only branches.
+  // Fire-and-await: local-branch synthetic PR meta and upstream PR meta
+  // both kick off here. local_branch_meta MUST complete before we build
+  // enrichedMeta (which reads u.pr.title for jira-tag parsing). upstream
+  // meta only feeds the render loop, so it can stay in flight until then.
   const localBranches = enrichedStacks.flatMap((s) =>
     s.userBranches.filter((u) => u.isLocal)
   );
-  await Promise.all(
-    localBranches.map(async (u) => {
-      const meta = await fetchLocalBranchMeta(u.branch);
-      if (meta) u.pr = meta;
-      else u.pr = { number: null, title: u.branch, isLocal: true, isDraft: false };
-    })
+  const localMetaPromise = t.time("local_branch_meta", () =>
+    Promise.all(
+      localBranches.map(async (u) => {
+        const meta = await fetchLocalBranchMeta(u.branch);
+        if (meta) u.pr = meta;
+        else u.pr = { number: null, title: u.branch, isLocal: true, isDraft: false };
+      })
+    )
   );
-
-  // Look up review decisions for upstream branches that have open PRs.
-  const upstreamLookups = new Map();
-  for (const s of enrichedStacks) {
-    for (const ub of s.upstreamBranches) {
-      if (!upstreamLookups.has(ub.branch)) {
-        upstreamLookups.set(ub.branch, fetchAnyPR(ub.branch));
+  const upstreamMetaPromise = t.time("upstream_meta", async () => {
+    const upstreamLookups = new Map();
+    for (const s of enrichedStacks) {
+      for (const ub of s.upstreamBranches) {
+        if (!upstreamLookups.has(ub.branch)) {
+          upstreamLookups.set(ub.branch, fetchAnyPR(ub.branch));
+        }
       }
     }
-  }
-  const upstreamPRMap = new Map();
-  for (const [branch, p] of upstreamLookups) {
-    const result = await p;
-    if (result && result.state === "OPEN") upstreamPRMap.set(branch, result);
-  }
-  const upstreamMetaMap = new Map();
-  await Promise.all(
-    [...upstreamPRMap.values()].map(async (pr) => {
-      const meta = await fetchPRMeta(pr.number);
-      if (meta) upstreamMetaMap.set(pr.headRefName, meta);
-    })
-  );
+    const upstreamPRMap = new Map();
+    for (const [branch, p] of upstreamLookups) {
+      const result = await p;
+      if (result && result.state === "OPEN") upstreamPRMap.set(branch, result);
+    }
+    const metaMap = new Map();
+    await Promise.all(
+      [...upstreamPRMap.values()].map(async (pr) => {
+        const meta = await fetchPRMeta(pr.number);
+        if (meta) metaMap.set(pr.headRefName, meta);
+      })
+    );
+    return metaMap;
+  });
 
-  // Fetch review threads + CI rollup for all user PRs in ONE bulk GraphQL.
-  const allUserPRNums = enrichedStacks.flatMap((s) =>
-    s.userBranches
-      .filter((u) => u.pr && !u.isMerged && u.pr.number != null)
-      .map((u) => u.pr.number)
-  );
-  const prSignals = await fetchPrSignalsBulk(allUserPRNums);
+  // Need u.pr.title for jira-tag parsing in enrichedMeta — wait only for
+  // local_branch_meta (typically 20ms). upstream/pr_signals stay running.
+  await localMetaPromise;
 
-  // Pre-compute jiraKeys + worktree per stack so we can kick off all
-  // session-scoring calls in parallel up front (each scoring call grep's ~60
-  // JSONL files; serializing them across stacks turned a few-hundred-ms job
-  // into seconds).
+  // Pre-compute jiraKeys + worktree per stack — synchronous derivation.
   const enrichedMeta = enrichedStacks.map((es) => {
     const userOpenPRs = es.userBranches.filter((u) => u.pr && !u.isMerged);
     const userMergedPRs = es.userBranches.filter((u) => u.isMerged);
@@ -247,15 +299,50 @@ async function buildModel() {
     ];
     return { es, userOpenPRs, userMergedPRs, jiraKeys, worktree, keywords };
   });
-  const resumePromises = enrichedMeta.map((m) =>
-    scoreSessionsForStack(m.keywords, m.worktree?.name)
+  // (E) Kick off all three parallel arrays and await them in ONE shot up
+  // front instead of `await`ing per-stack inside the loop. Each subarray
+  // gets its own timer so we can spot which of the three is the slow leg.
+  const resumesPromise = t.time("resumes", () =>
+    Promise.all(
+      enrichedMeta.map((m) =>
+        scoreSessionsForStack(m.keywords, m.worktree?.name)
+      )
+    )
   );
-  const behindPromises = enrichedMeta.map((m) =>
-    fetchStackBehind(m.es.userBranches[0].branch)
+  const behindsPromise = t.time("behinds", () =>
+    Promise.all(
+      enrichedMeta.map((m) => fetchStackBehind(m.es.userBranches[0].branch))
+    )
   );
-  const conflictPromises = enrichedMeta.map((m) =>
-    checkRestackConflicts(m.es.userBranches[0].branch)
+  const conflictsPromise = t.time("conflicts", () =>
+    Promise.all(
+      enrichedMeta.map((m) =>
+        checkRestackConflicts(m.es.userBranches[0].branch)
+      )
+    )
   );
+  // We can start jira_chips now: it only needs the union of jira keys
+  // across all stacks, which is derivable from enrichedMeta. Letting it
+  // run in parallel with the slow `resumes` work means jira_chips's
+  // ~1.2s falls inside the resumes window instead of after it.
+  const allJiraKeys = [
+    ...new Set(enrichedMeta.flatMap((m) => m.jiraKeys)),
+  ];
+  const jiraChipsPromise = allJiraKeys.length
+    ? t.time("jira_chips", () => fetchJiraTickets(allJiraKeys))
+    : Promise.resolve({});
+
+  // Single barrier before the render loop: wait for everything still in
+  // flight. resumes (~5s) is the long tail; everything else is shorter
+  // and overlapping with it.
+  const [resumes, behinds, conflicts, prSignals, upstreamMetaMap] =
+    await Promise.all([
+      resumesPromise,
+      behindsPromise,
+      conflictsPromise,
+      prSignalsPromise,
+      upstreamMetaPromise,
+    ]);
 
   const stacks = [];
   for (let stackIdx = 0; stackIdx < enrichedMeta.length; stackIdx++) {
@@ -393,9 +480,9 @@ async function buildModel() {
         ? jiraKeys.join("+")
         : `NO-JIRA-${es.userBranches[es.userBranches.length - 1].branch}`;
 
-    const resume = await resumePromises[stackIdx];
-    const behindOrigin = await behindPromises[stackIdx];
-    const restackCheck = await conflictPromises[stackIdx];
+    const resume = resumes[stackIdx];
+    const behindOrigin = behinds[stackIdx];
+    const restackCheck = conflicts[stackIdx];
 
     stacks.push({
       stack_key: stackKey,
@@ -420,7 +507,7 @@ async function buildModel() {
     });
   }
 
-  await enhanceStackNamesWithClaude(stacks);
+  await t.time("enhance_names", () => enhanceStackNamesWithClaude(stacks));
 
   const categoryOrder = {
     human_review: 0,
@@ -434,58 +521,31 @@ async function buildModel() {
       (categoryOrder[a.category] ?? 9) - (categoryOrder[b.category] ?? 9)
   );
 
-  // Stale worktrees.
-  const activeBranches = new Set(openPRs.map((p) => p.headRefName));
-  const staleResults = await Promise.all(
-    worktrees.map(async (w) => {
-      if (activeBranches.has(w.branch)) return null;
-      const anyPR = await fetchAnyPR(w.branch);
-      if (anyPR) {
-        if (anyPR.state === "MERGED") {
-          return { ...w, reason: `PR #${anyPR.number} merged`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
-        }
-        if (anyPR.state === "CLOSED") {
-          return { ...w, reason: `PR #${anyPR.number} closed without merge`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
-        }
-        return null;
-      }
-      try {
-        const { stdout } = await execP(
-          `git -C '${w.path}' log main..HEAD --oneline | head -1`
-        );
-        if (!stdout.trim()) {
-          return { ...w, reason: "Branch fully merged into main (no unique commits)", pr_num: null, pr_url: null };
-        }
-      } catch {
-        // ignore — git error means we just don't classify this worktree as stale
-      }
-      return null;
-    })
-  );
+  // All three of these promises were kicked off earlier and have been
+  // running while resumes was the long tail. Awaiting them here is
+  // essentially free — they're almost always already resolved.
+  const [staleResults, jiraChipsMap, openJiraTickets] = await Promise.all([
+    stalePromise,
+    jiraChipsPromise,
+    openJiraPromise,
+  ]);
   const staleWorktrees = staleResults.filter(Boolean);
 
   // Enrich stacks with Jira chip data (key + summary).
-  const allJiraKeys = [...new Set(stacks.flatMap((s) => s.jira_keys))];
   const ticketsByKey = new Map();
-  if (allJiraKeys.length > 0) {
-    const map = await fetchJiraTickets(allJiraKeys);
-    for (const [k, v] of Object.entries(map)) if (v) ticketsByKey.set(k, v);
+  for (const [k, v] of Object.entries(jiraChipsMap || {})) {
+    if (v) ticketsByKey.set(k, v);
   }
   for (const s of stacks) {
     s.jira_chips = s.jira_keys.map((k) => {
-      const t = ticketsByKey.get(k);
+      const ticket = ticketsByKey.get(k);
       return {
         key: k,
-        summary: t?.summary || null,
+        summary: ticket?.summary || null,
         url: `https://revefi.atlassian.net/browse/${k}`,
       };
     });
   }
-
-  // Jira tickets assigned to me — all of them, with a `stack` reference for any
-  // ticket that's already attached to an open stack. Wire field name kept as
-  // `untouched_jira` to avoid churn — the section title in the UI is "Jira".
-  const openJiraTickets = await fetchOpenJiraTickets();
   const jiraKeyToStack = new Map();
   for (const s of stacks) {
     for (const k of s.jira_keys) {
@@ -522,6 +582,13 @@ async function buildModel() {
       (p) => p.decision === "CHANGES_REQUESTED"
     ).length,
   };
+
+  appendTimingRecord(
+    t.summary({
+      stack_count: stacks.length,
+      open_pr_count: totals.open_prs,
+    })
+  );
 
   return {
     meta: {
