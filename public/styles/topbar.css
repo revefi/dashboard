@@ -86,8 +86,11 @@ header.top {
 #refresh-btn {
   min-width: 110px;
 }
+/* Slightly tighter padding on the 🧠 button so the wider "Intelligent"
+   label doesn't make it visibly heavier than its neighbours. */
 #refresh-intelligent-btn {
-  min-width: 125px;
+  padding: 6px 8px;
+  min-width: 116px;
 }
 /* Background tint fill driven by --refresh-progress (0..1), written by
    public/app/progress.js while a refresh is in flight. After ≥5 recorded
