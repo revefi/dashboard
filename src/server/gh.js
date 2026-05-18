@@ -17,9 +17,14 @@ async function fetchOpenPRs() {
   // gh's --author filter returns 0 results when invoked under Node child_process for reasons
   // I cannot pin down — works fine from interactive shell. Workaround: fetch all open PRs via
   // gh pr list (no filter) and filter to my login client-side.
+  //
+  // --limit 500: gh sorts the result by createdAt desc, so a low limit drops *older* PRs
+  // first. With ~500 open PRs across the org, --limit 200 was clipping older user-owned
+  // PRs (e.g. the bottom of a long-running stack) and the partitioning logic then
+  // misclassified those lower branches as upstream by another author.
   const login = await getLogin();
   const stdout = await shRetry(
-    `gh pr list ${GH_REPO_FLAG} --state open --limit 200 ` +
+    `gh pr list ${GH_REPO_FLAG} --state open --limit 500 ` +
       `--json number,title,url,isDraft,createdAt,updatedAt,headRefName,baseRefName,reviewDecision,author`
   );
   const all = JSON.parse(stdout);

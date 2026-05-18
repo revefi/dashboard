@@ -32,6 +32,15 @@ const {
   enhanceStackNamesWithClaude,
 } = require("./claude");
 
+// All PR links in the dashboard go to Graphite, not GitHub — CLAUDE.md
+// convention. gh CLI / GraphQL responses give us the GitHub URL by default,
+// so we always derive ours from the PR number instead of using `.url`.
+function graphiteUrl(prNumber) {
+  return prNumber != null
+    ? `https://app.graphite.com/github/pr/revefi/rcode/${prNumber}`
+    : null;
+}
+
 function parseTitle(title) {
   // Extract [REV-XXXX] or [NO-JIRA] and [Part N] prefixes, return remainder.
   let body = title;
@@ -267,9 +276,7 @@ async function buildModel() {
       const isLocal = !!u.pr.isLocal;
       return {
         num: u.pr.number,
-        url: u.pr.number
-          ? `https://app.graphite.com/github/pr/revefi/rcode/${u.pr.number}`
-          : null,
+        url: graphiteUrl(u.pr.number),
         branch: u.branch,
         title: t.title,
         jira_tag: t.jira_tag,
@@ -312,7 +319,7 @@ async function buildModel() {
         );
         return {
           num: meta.number,
-          url: meta.url,
+          url: graphiteUrl(meta.number),
           title: t.title,
           jira_tag: t.jira_tag,
           part_tag: t.part_tag,
@@ -435,10 +442,10 @@ async function buildModel() {
       const anyPR = await fetchAnyPR(w.branch);
       if (anyPR) {
         if (anyPR.state === "MERGED") {
-          return { ...w, reason: `PR #${anyPR.number} merged`, pr_num: anyPR.number, pr_url: anyPR.url };
+          return { ...w, reason: `PR #${anyPR.number} merged`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
         }
         if (anyPR.state === "CLOSED") {
-          return { ...w, reason: `PR #${anyPR.number} closed without merge`, pr_num: anyPR.number, pr_url: anyPR.url };
+          return { ...w, reason: `PR #${anyPR.number} closed without merge`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
         }
         return null;
       }
