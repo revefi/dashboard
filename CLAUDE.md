@@ -38,6 +38,7 @@ except via configured absolute paths in `src/server/config.js` (`REPO`,
 │   │   ├── render.js        all render*() + render(data) + rebuildSidebar
 │   │   ├── notepad.js       markdown editor + notepad init
 │   │   ├── theme.js         Auto/Light/Dark cycle button
+│   │   ├── progress.js      median-driven progress fill on refresh buttons
 │   │   ├── jira-state.js    state-pill popover + transitions
 │   │   ├── restack-action.js  restack click handler
 │   │   ├── refresh.js       auto-refresh, freshness, collapse-all
@@ -278,6 +279,7 @@ placeholders by `innerHTML = ...` after fetching `/api/data`.
 | `render.js` | every `render*()` function + `render(data)` + `rebuildSidebar(data)` |
 | `notepad.js` | `wireMarkdownRemarks`, `renderMarkdown`, `initNotepad`, `applyNotepadVisibility`, `toggleNotepad` |
 | `theme.js` | `initTheme()` — wires the header's Auto/Light/Dark cycle button. "Auto" leaves `data-theme` unset so the OS @media query drives styling; Light/Dark sets `data-theme="..."` on `<html>` and persists under `dashboard.theme`. First-paint application is done by an inline `<script>` in `index.html`'s `<head>` to avoid FOUC. |
+| `progress.js` | `startRefreshProgress(btn, mode)` / `stopRefreshProgress(btn)` — `rAF` ticker that writes `--refresh-progress` (0..1) onto a button based on `elapsed / median(stored timings)`. `api.js` calls these around each refresh; `topbar.css` turns the variable into a left-to-right background tint fill. Pulses opacity once the elapsed time exceeds the median. Stays a no-op until we have ≥5 recorded samples — first 4 refreshes just show the label change. |
 | `jira-state.js` | `openStateMenu`, popover positioning, `handleStateTransition` (optimistic, with revert on failure) |
 | `restack-action.js` | `handleRestackClick` — confirm dialog + POST + spinner |
 | `refresh.js` | `setupAutoRefresh` (self-rescheduling setTimeout + visibilitychange catch-up), `updateFreshness`, `toggleAllStacks`, `syncStickyTop` |
@@ -400,6 +402,8 @@ All under the `dashboard.*` namespace:
 | `dashboard.notepad_hidden` | `"1"` if the right-side notepad column is hidden |
 | `dashboard.auto_refresh_ms` | Selected auto-refresh interval in ms (60000/300000/600000/1800000) |
 | `dashboard.theme` | `"light"` or `"dark"` if the user picked one. Absent = follow OS via `prefers-color-scheme`. |
+| `dashboard.refresh_timings_ms` | JSON array of recent `/api/data` durations in ms (rolling window of 50). Drives the progress fill on the ↻ Refresh button after ≥5 samples accumulate. |
+| `dashboard.recs_timings_ms` | Same shape, for `/api/recommendations` (force=true only — cached reads aren't measured). Drives progress on the ⟳ Generate / 🧠 Intelligent buttons. |
 
 ## Adding features
 

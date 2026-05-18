@@ -201,6 +201,11 @@ stale each side is.
 - **Theme toggle** in the header cycles **Auto → Light → Dark**. "Auto"
   follows the OS `prefers-color-scheme`; pick a side to override and
   it's remembered (per browser).
+- **Refresh-time progress fill** on the ↻ Refresh and 🧠 Intelligent
+  buttons. After the dashboard has seen 5 successful refreshes it
+  estimates the median duration; the button background fills
+  left-to-right as the next refresh runs. If it goes long, the fill
+  pulses to show we're past the typical time but still working.
 
 ---
 
@@ -308,6 +313,7 @@ public/app/         frontend, native ES modules — no bundler
   render.js         all render*() functions + render(data)
   notepad.js        markdown editor + notepad init
   theme.js          Auto/Light/Dark cycle button
+  progress.js       median-driven progress fill on refresh buttons
   jira-state.js     state-pill popover + transitions
   restack-action.js restack click handler
   refresh.js        auto-refresh, freshness, collapse-all
