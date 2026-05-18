@@ -77,6 +77,18 @@ header.top {
 .refresh-btn.loading {
   cursor: wait;
 }
+/* Lock the width of the two buttons whose labels swap between idle ("↻
+   Refresh", "🧠 Intelligent") and loading ("↻ Refreshing…", "🧠 Thinking…")
+   states. Without these, the row visibly jumps every time a refresh
+   starts or finishes. min-width covers the widest possible label per
+   button at the current font-size; box-sizing: border-box (set globally
+   in base.css) means the padding is already included. */
+#refresh-btn {
+  min-width: 130px;
+}
+#refresh-intelligent-btn {
+  min-width: 130px;
+}
 /* Background tint fill driven by --refresh-progress (0..1), written by
    public/app/progress.js while a refresh is in flight. After ≥5 recorded
    refresh durations, the fill grows roughly in lockstep with elapsed time.

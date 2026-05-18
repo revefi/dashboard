@@ -16,7 +16,7 @@ export function updateFreshness() {
     $("#freshness").textContent = `· ${relAge(store.lastFetchTs)}`;
   const lastIntel = parseInt(localStorage.getItem(LAST_INTEL_KEY) || "0", 10);
   if (lastIntel) {
-    $("#intel-freshness").textContent = `· intel ${relAge(lastIntel)}`;
+    $("#intel-freshness").textContent = `· ${relAge(lastIntel)}`;
   } else {
     $("#intel-freshness").textContent = "· not yet run";
   }

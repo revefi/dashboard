@@ -63,7 +63,11 @@ export function fetchData(force = false, intelligent = false) {
       }
       const data = await res.json();
       store.currentData = data;
-      store.lastFetchTs = Date.now();
+      // Only the normal Refresh button's freshness ("· Xs ago") tracks
+      // lastFetchTs. Intelligent has its own LAST_INTEL_KEY timestamp set
+      // by intelligentRefresh — bumping lastFetchTs here too would reset
+      // the normal button's freshness label on every Intelligent click.
+      if (!intelligent) store.lastFetchTs = Date.now();
       render(data);
       $("#error-banner").style.display = "none";
       updateFreshness();
