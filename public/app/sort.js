@@ -36,34 +36,42 @@ function totalHumanComments(s) {
 // puts the largest value at the top (desc, ↓) or the smallest (asc, ↑).
 // The direction toggle reverses the sorted result; the arrow shown in the
 // UI is derived from naturalDir XOR (dir === "reversed").
+// Labels are neutral dimensions ("Updated", not "Recently updated") so
+// the dropdown reads cleanly with the arrow toggle — "Updated ↓" is
+// newest first, "Updated ↑" is oldest first, etc. Each `naturalDir` is
+// what most users expect as the *default* direction for that dimension:
+// Updated → newest first (desc); Created → oldest first (asc, the
+// "stalled work" use case); Name → A-Z (asc).
 export const SORT_MODES = {
   updated: {
-    label: "Recently updated",
+    label: "Updated",
     naturalDir: "desc",
     cmp: (a, b) => maxUpdated(b) - maxUpdated(a),
   },
   behind: {
-    label: "Most behind origin",
+    label: "Behind",
     naturalDir: "desc",
     cmp: (a, b) => (b.behind_origin || 0) - (a.behind_origin || 0),
   },
   comments: {
-    label: "Most review comments",
+    label: "Comments",
     naturalDir: "desc",
     cmp: (a, b) => totalHumanComments(b) - totalHumanComments(a),
   },
   prs: {
-    label: "Most PRs",
+    label: "PRs",
     naturalDir: "desc",
     cmp: (a, b) => (b.counts?.created || 0) - (a.counts?.created || 0),
   },
+  // Kept the `oldest` storage key so any localStorage value from before
+  // the rename keeps working — only the displayed label changed.
   oldest: {
-    label: "Oldest first",
+    label: "Created",
     naturalDir: "asc",
     cmp: (a, b) => minCreated(a) - minCreated(b),
   },
   name: {
-    label: "Alphabetical",
+    label: "Name",
     naturalDir: "asc",
     cmp: (a, b) => (a.name || "").localeCompare(b.name || ""),
   },
