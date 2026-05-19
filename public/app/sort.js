@@ -63,9 +63,7 @@ export const SORT_MODES = {
     naturalDir: "desc",
     cmp: (a, b) => (b.counts?.created || 0) - (a.counts?.created || 0),
   },
-  // Kept the `oldest` storage key so any localStorage value from before
-  // the rename keeps working — only the displayed label changed.
-  oldest: {
+  created: {
     label: "Created",
     naturalDir: "asc",
     cmp: (a, b) => minCreated(a) - minCreated(b),

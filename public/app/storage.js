@@ -10,7 +10,7 @@ export const AUTO_REFRESH_INTERVAL_KEY = "dashboard.auto_refresh_ms";
 export const SPRINT_FILTER_KEY = "dashboard.sprint_filter";
 export const STACK_FILTER_KEY = "dashboard.stack_filter";
 // Active-stacks sort order — one of: "updated", "behind", "comments",
-// "prs", "oldest", "name". Absent → defaults to "updated".
+// "prs", "created", "name". Absent → defaults to "updated".
 export const ACTIVE_STACK_SORT_KEY = "dashboard.active_stack_sort";
 // Direction toggle for the active-stacks sort: "natural" follows each
 // mode's preferred direction (most-interesting-first), "reversed" flips it.
