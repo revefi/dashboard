@@ -378,6 +378,11 @@ async function buildModel() {
         // Suppress check chip on drafts and local-only branches.
         checks: u.pr.isDraft || isLocal ? null : sig.checks,
         updated_label: relTime(u.pr.updatedAt),
+        // Raw ISO timestamps so the frontend can sort stacks by recency
+        // and age. updated_label is pre-formatted for the row UI; these
+        // are the sortable counterparts.
+        updated_at: u.pr.updatedAt || null,
+        created_at: u.pr.createdAt || null,
         needs_restack: u.flags && u.flags.includes("needs restack"),
       };
     });

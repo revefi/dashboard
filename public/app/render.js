@@ -13,7 +13,10 @@ import {
   setSprintFilter,
   getStackFilter,
   setStackFilter,
+  getActiveStackSort,
+  setActiveStackSort,
 } from "./storage.js";
+import { SORT_MODES, sortStacks } from "./sort.js";
 import { wireDelegates } from "./delegates.js";
 
 export function renderSummary(meta) {
@@ -645,7 +648,12 @@ export function renderRecs(recs) {
 export function rebuildSidebar(data) {
   if (!data) return;
   const completed = getCompletedSet();
-  const active = data.stacks.filter((s) => !completed.has(s.stack_key));
+  // Sort active stacks the same way the main view does so the sidebar
+  // numbering matches what the user sees on the right.
+  const active = sortStacks(
+    data.stacks.filter((s) => !completed.has(s.stack_key)),
+    getActiveStackSort()
+  );
   const merged = data.stacks.filter((s) => completed.has(s.stack_key));
 
   const sections = [];
@@ -728,13 +736,36 @@ export function rebuildSidebar(data) {
   });
 }
 
+function renderActiveSortDropdown() {
+  const wrap = $("#active-sort-wrap");
+  if (!wrap) return;
+  const cur = getActiveStackSort();
+  const opts = Object.entries(SORT_MODES)
+    .map(
+      ([key, mode]) =>
+        `<option value="${esc(key)}">${esc(mode.label)}</option>`
+    )
+    .join("");
+  wrap.innerHTML = `<select class="sprint-select" id="active-sort-select" title="Sort active stacks">${opts}</select>`;
+  const sel = $("#active-sort-select");
+  sel.value = cur;
+  sel.addEventListener("change", () => {
+    setActiveStackSort(sel.value);
+    // Re-render with the new sort. Cheap: same data, just resorted.
+    render(store.currentData);
+  });
+}
+
 export function render(data) {
   if (!data) return;
   renderSummary(data.meta);
   const completed = getCompletedSet();
 
-  const active = data.stacks.filter((s) => !completed.has(s.stack_key));
+  const activeUnsorted = data.stacks.filter((s) => !completed.has(s.stack_key));
+  const active = sortStacks(activeUnsorted, getActiveStackSort());
   const merged = data.stacks.filter((s) => completed.has(s.stack_key));
+
+  renderActiveSortDropdown();
 
   $("#active-stacks").innerHTML =
     active.length === 0

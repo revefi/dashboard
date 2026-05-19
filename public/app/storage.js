@@ -9,6 +9,9 @@ export const STACK_NAME_OVERRIDE_PREFIX = "dashboard.stack_name_override.";
 export const AUTO_REFRESH_INTERVAL_KEY = "dashboard.auto_refresh_ms";
 export const SPRINT_FILTER_KEY = "dashboard.sprint_filter";
 export const STACK_FILTER_KEY = "dashboard.stack_filter";
+// Active-stacks sort order — one of: "updated", "behind", "comments",
+// "prs", "oldest", "name". Absent → defaults to "updated".
+export const ACTIVE_STACK_SORT_KEY = "dashboard.active_stack_sort";
 export const NOTEPAD_HIDDEN_KEY = "dashboard.notepad_hidden";
 export const LAST_INTEL_KEY = "dashboard.lastIntelligentTs";
 // Theme override: "light" or "dark" forces, absence means follow OS.
@@ -118,4 +121,12 @@ export function getStackFilter() {
 
 export function setStackFilter(v) {
   localStorage.setItem(STACK_FILTER_KEY, v);
+}
+
+export function getActiveStackSort() {
+  return localStorage.getItem(ACTIVE_STACK_SORT_KEY) || "updated";
+}
+
+export function setActiveStackSort(v) {
+  localStorage.setItem(ACTIVE_STACK_SORT_KEY, v);
 }
