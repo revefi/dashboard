@@ -750,7 +750,7 @@ function renderActiveSortDropdown() {
         `<option value="${esc(key)}">${esc(mode.label)}</option>`
     )
     .join("");
-  const arrow = arrowFor(curMode, curDir);
+  const arrow = arrowFor(curDir);
   // Re-render the wrap from scratch every time; cheap and means we don't
   // have to track which controls already exist.
   wrap.innerHTML =
@@ -763,7 +763,7 @@ function renderActiveSortDropdown() {
     render(store.currentData);
   });
   $("#active-sort-dir-btn").addEventListener("click", () => {
-    setActiveStackSortDir(curDir === "reversed" ? "natural" : "reversed");
+    setActiveStackSortDir(curDir === "asc" ? "desc" : "asc");
     render(store.currentData);
   });
 }

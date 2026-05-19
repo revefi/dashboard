@@ -12,8 +12,9 @@ export const STACK_FILTER_KEY = "dashboard.stack_filter";
 // Active-stacks sort order — one of: "updated", "behind", "comments",
 // "prs", "created", "name". Absent → defaults to "updated".
 export const ACTIVE_STACK_SORT_KEY = "dashboard.active_stack_sort";
-// Direction toggle for the active-stacks sort: "natural" follows each
-// mode's preferred direction (most-interesting-first), "reversed" flips it.
+// Direction toggle for the active-stacks sort: "desc" (largest at top,
+// default) or "asc" (smallest at top). Mode-independent — flipping the
+// toggle in one mode keeps the same direction when you switch modes.
 export const ACTIVE_STACK_SORT_DIR_KEY = "dashboard.active_stack_sort_dir";
 export const NOTEPAD_HIDDEN_KEY = "dashboard.notepad_hidden";
 export const LAST_INTEL_KEY = "dashboard.lastIntelligentTs";
@@ -135,9 +136,9 @@ export function setActiveStackSort(v) {
 }
 
 export function getActiveStackSortDir() {
-  return localStorage.getItem(ACTIVE_STACK_SORT_DIR_KEY) === "reversed"
-    ? "reversed"
-    : "natural";
+  return localStorage.getItem(ACTIVE_STACK_SORT_DIR_KEY) === "asc"
+    ? "asc"
+    : "desc";
 }
 
 export function setActiveStackSortDir(v) {
