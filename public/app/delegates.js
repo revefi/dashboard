@@ -218,48 +218,48 @@ export function wireDelegates() {
     });
   });
 
-  // Drag-and-drop reordering for the Custom sort mode. Drag handles are
-  // rendered on every active card but only visible (via CSS) when
-  // body.custom-sort is set. We still wire the handlers unconditionally —
-  // a handle that isn't visible can't initiate a drag.
-  $$(".card-drag-handle").forEach((handle) => {
-    if (handle._dragWired) return;
-    handle._dragWired = true;
-    handle.addEventListener("dragstart", (e) => {
-      const card = handle.closest(".stack-card");
-      if (!card) return;
+  // Drag-and-drop reordering for the Custom sort mode. The whole card is
+  // the drag source (render.js sets card.draggable = true only in custom
+  // mode); the ⋮⋮ icon is just a visual cue. Form controls and links
+  // keep their normal behavior — the browser distinguishes click from
+  // drag by movement, so expand-on-click still works.
+  $$("#active-stacks .stack-card").forEach((card) => {
+    if (card._dragWired) return;
+    card._dragWired = true;
+    card.addEventListener("dragstart", (e) => {
+      // Bail if the card isn't currently draggable (mode flipped away from
+      // custom but the listener stayed bound from a previous render).
+      if (!card.draggable) return;
+      // Some clicks/drags originate from interactive children that we
+      // explicitly want to behave normally (e.g. dragging selected text
+      // from the remarks textarea). Bail if the drag started from one.
+      if (e.target.closest("textarea, input, a, button")) {
+        e.preventDefault();
+        return;
+      }
       const key = card.dataset.stackKey;
-      // dataTransfer is required for the drag to start in some browsers;
-      // payload itself is unused since we read draggedKey directly.
       e.dataTransfer.setData("text/plain", key);
       e.dataTransfer.effectAllowed = "move";
       card.classList.add("dragging");
       _draggedStackKey = key;
     });
-    handle.addEventListener("dragend", () => {
-      const card = handle.closest(".stack-card");
-      if (card) card.classList.remove("dragging");
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
       _clearDropTargets();
       _draggedStackKey = null;
     });
-  });
-  $$("#active-stacks .stack-card").forEach((card) => {
-    if (card._dropWired) return;
-    card._dropWired = true;
     card.addEventListener("dragover", (e) => {
       if (!_draggedStackKey) return;
       if (card.dataset.stackKey === _draggedStackKey) return;
       e.preventDefault(); // allow drop
       e.dataTransfer.dropEffect = "move";
       _clearDropTargets();
-      // Show a top-edge cue when hovering the upper half, bottom-edge for
-      // the lower half — same UX as native list reorder.
+      // Top half → drop ABOVE this card. Bottom half → drop BELOW it.
       const rect = card.getBoundingClientRect();
       const before = e.clientY < rect.top + rect.height / 2;
       card.classList.add(before ? "drop-before" : "drop-after");
     });
     card.addEventListener("dragleave", (e) => {
-      // Don't clear if leaving into a child element of the same card.
       if (!card.contains(e.relatedTarget)) {
         card.classList.remove("drop-before", "drop-after");
       }

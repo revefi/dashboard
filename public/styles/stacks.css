@@ -208,6 +208,12 @@ body.custom-sort #active-stacks .card-drag-handle {
 body.custom-sort #active-stacks .stack-card .stack-summary {
   padding-left: 38px; /* breathing room for the handle */
 }
+body.custom-sort #active-stacks .stack-card {
+  cursor: grab;
+}
+body.custom-sort #active-stacks .stack-card.dragging {
+  cursor: grabbing;
+}
 .stack-card.dragging {
   opacity: 0.4;
 }

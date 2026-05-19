@@ -312,12 +312,12 @@ function renderStackCard(stack, isMerged, idx) {
   const anchorId = `stack-${completed ? "merged" : "active"}-${esc(
     stack.stack_key
   )}`;
-  // Drag handle is always rendered but CSS hides it unless the body has
-  // `.custom-sort`. Only active (non-merged) cards are draggable — there's
-  // no point reordering completed work.
+  // Visual cue for the custom-sort drag target. The card itself is the
+  // draggable element (toggled via the .draggable attribute from render())
+  // so users can grab it from anywhere — the handle is just a hint.
   const dragHandle = completed
     ? ""
-    : `<span class="card-drag-handle" draggable="true" data-stop-toggle title="Drag to reorder">⋮⋮</span>`;
+    : `<span class="card-drag-handle" data-stop-toggle title="Drag to reorder">⋮⋮</span>`;
   return `
     <div id="${anchorId}" class="card stack-card ${
     completed ? "merged-card" : ""
@@ -831,14 +831,22 @@ export function render(data) {
   const merged = data.stacks.filter((s) => completed.has(s.stack_key));
 
   renderActiveSortDropdown();
-  // Drives CSS for drag-handle visibility + disables data-toggle-card
-  // while the user is dragging via JS handlers in delegates.js.
-  document.body.classList.toggle("custom-sort", getActiveStackSort() === "custom");
+  const isCustom = getActiveStackSort() === "custom";
+  // Drives CSS for the drag-handle hint and the grab cursor.
+  document.body.classList.toggle("custom-sort", isCustom);
 
   $("#active-stacks").innerHTML =
     active.length === 0
       ? '<div class="card" style="text-align:center;color:var(--muted)">No active stacks.</div>'
       : active.map((s, i) => renderStackCard(s, false, i + 1)).join("");
+
+  // Make the whole card draggable only in custom mode. Form controls,
+  // links, and buttons inside the card keep their normal mouse behavior;
+  // the browser distinguishes click from drag by movement, so the
+  // expand-on-click handler still fires on a plain click.
+  for (const card of $$("#active-stacks .stack-card")) {
+    card.draggable = isCustom;
+  }
 
   if (merged.length > 0) {
     $("#merged-section").style.display = "";
