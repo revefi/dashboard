@@ -223,6 +223,21 @@ export function wireDelegates() {
   // mode); the ⋮⋮ icon is just a visual cue. Form controls and links
   // keep their normal behavior — the browser distinguishes click from
   // drag by movement, so expand-on-click still works.
+  // Auto-scroll the viewport when the cursor reaches its edges during a
+  // drag — native HTML5 drag-and-drop won't do this for you. Wired once
+  // on document (idempotent via a flag) since the listener tracks the
+  // global drag state, not a specific card.
+  if (!document._dashDragAutoScrollWired) {
+    document._dashDragAutoScrollWired = true;
+    document.addEventListener("dragover", (e) => {
+      if (!_draggedStackKey) return;
+      _lastDragClientY = e.clientY;
+      if (_autoScrollRaf == null) {
+        _autoScrollRaf = requestAnimationFrame(_autoScrollTick);
+      }
+    });
+  }
+
   $$("#active-stacks .stack-card").forEach((card) => {
     if (card._dragWired) return;
     card._dragWired = true;
@@ -284,6 +299,31 @@ export function wireDelegates() {
 // one element fires drop on a sibling, and async re-renders mean handlers
 // re-attach to fresh DOM nodes.
 let _draggedStackKey = null;
+let _lastDragClientY = 0;
+let _autoScrollRaf = null;
+
+// Auto-scroll constants. Within EDGE_ZONE px of the top/bottom edge of
+// the viewport, scroll proportionally (0 at the edge of the zone,
+// EDGE_SPEED at the actual viewport boundary).
+const EDGE_ZONE = 90;
+const EDGE_SPEED = 22;
+
+function _autoScrollTick() {
+  if (!_draggedStackKey) {
+    _autoScrollRaf = null;
+    return;
+  }
+  const y = _lastDragClientY;
+  const h = window.innerHeight;
+  let dy = 0;
+  if (y < EDGE_ZONE) {
+    dy = -EDGE_SPEED * (1 - y / EDGE_ZONE);
+  } else if (y > h - EDGE_ZONE) {
+    dy = EDGE_SPEED * (1 - (h - y) / EDGE_ZONE);
+  }
+  if (dy !== 0) window.scrollBy(0, dy);
+  _autoScrollRaf = requestAnimationFrame(_autoScrollTick);
+}
 
 function _clearDropTargets() {
   for (const el of document.querySelectorAll(".drop-before, .drop-after")) {
