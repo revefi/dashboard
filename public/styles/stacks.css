@@ -128,29 +128,43 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+/* Pill palette — semantically chosen so colors map to action urgency:
+     green  = ready to act (merge it)
+     red    = action needed on you (address comments / resolve conflicts)
+     yellow = passive waiting (reviewers haven't reviewed yet)
+     blue   = waiting on an external dependency (upstream PRs)
+     purple = informational / housekeeping (needs restack)
+     green-faded (.merged) = done */
 .pill.ready {
   background: var(--success-bg);
   color: var(--success);
 }
 .pill.human_review {
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-.pill.blocked_upstream {
   background: var(--danger-bg);
   color: var(--danger);
 }
+.pill.blocked_upstream {
+  background: var(--primary-bg);
+  color: var(--primary);
+}
 .pill.awaiting_review {
-  background: var(--info-bg);
-  color: var(--info);
+  background: var(--warn-bg);
+  color: var(--warn);
 }
 .pill.other {
   background: var(--code-bg);
   color: var(--muted);
 }
+/* .warn historical alias kept in case something still references it. The
+   "Needs restack" pill now uses .info so it doesn't collide visually
+   with the yellow .awaiting_review category. */
 .pill.warn {
   background: var(--warn-bg);
   color: var(--warn);
+}
+.pill.info {
+  background: var(--info-bg);
+  color: var(--info);
 }
 .pill.danger {
   background: var(--danger-bg);

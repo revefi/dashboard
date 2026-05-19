@@ -54,8 +54,29 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Category tint — matches the .pill palette in stacks.css so the
+   sidebar entry reads at a glance as the same status as the card. The
+   conflict rule is listed AFTER the category rules so it wins (same
+   selector specificity → source order decides). */
+.jump-nav .nav-stack-item[data-category="ready"] {
+  background: var(--success-bg);
+}
+.jump-nav .nav-stack-item[data-category="awaiting_review"] {
+  background: var(--warn-bg);
+}
+.jump-nav .nav-stack-item[data-category="human_review"] {
+  background: var(--danger-bg);
+}
+.jump-nav .nav-stack-item[data-category="blocked_upstream"] {
+  background: var(--primary-bg);
+}
+.jump-nav .nav-stack-item[data-conflicts="1"] {
+  background: var(--danger-bg);
+}
 .jump-nav .nav-stack-item:hover {
-  background: var(--code-bg);
+  /* Slight darken on hover so the category tint reads through but the
+     hover state is still obviously a hover. */
+  filter: brightness(0.95);
   color: var(--primary);
 }
 .jump-nav .nav-stack-item.merged {

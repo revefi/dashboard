@@ -276,7 +276,7 @@ function renderStackCard(stack, isMerged, idx) {
         categoryTooltips[stack.category] || ""
       )}">${esc(stack.category_label)}</span>`;
   const pillRestack = stack.needs_restack
-    ? '<span class="pill warn">⚠ Needs restack</span>'
+    ? '<span class="pill info">⚠ Needs restack</span>'
     : "";
   // Surface predicted merge conflicts on the collapsed card too — the
   // expanded trunk row already shows them, but you shouldn't have to
@@ -681,6 +681,10 @@ export function rebuildSidebar(data) {
       num: i + 1,
       label: getStackNameOverride(s.stack_key) || s.name,
       cls: "",
+      // Sidebar bg colour is keyed off these — see styles/sidebar.css.
+      // Conflict tint wins over any category tint.
+      category: s.category,
+      hasConflicts: s.restack_check && s.restack_check.ok === false,
     })),
   });
   if (merged.length > 0) {
@@ -720,7 +724,9 @@ export function rebuildSidebar(data) {
                 (c) =>
                   `<button class="nav-stack-item ${c.cls}" data-jump="${esc(
                     c.id
-                  )}" title="${esc(c.label)}">
+                  )}" data-category="${esc(c.category || "")}" data-conflicts="${
+                    c.hasConflicts ? "1" : "0"
+                  }" title="${esc(c.label)}">
                     <span class="nav-stack-num">#${c.num}</span><span>${esc(
                     c.label
                   )}</span>
