@@ -278,6 +278,18 @@ function renderStackCard(stack, isMerged, idx) {
   const pillRestack = stack.needs_restack
     ? '<span class="pill warn">⚠ Needs restack</span>'
     : "";
+  // Surface predicted merge conflicts on the collapsed card too — the
+  // expanded trunk row already shows them, but you shouldn't have to
+  // open the card to know auto-restack won't work. The tooltip lists
+  // the conflicting files (first 5 + "+N more" if there are more).
+  let pillConflicts = "";
+  if (!completed && stack.restack_check && stack.restack_check.ok === false) {
+    const files = stack.restack_check.conflicts || [];
+    const preview = files.slice(0, 5).join("\n  ");
+    const more = files.length > 5 ? `\n  +${files.length - 5} more` : "";
+    const tip = `Predicted merge conflicts in:\n  ${preview}${more}\n\nResolve manually with \`gt restack\` in the worktree.`;
+    pillConflicts = `<span class="pill danger" title="${esc(tip)}">⚠ Conflicts</span>`;
+  }
 
   const wtCmd = stack.worktree
     ? `<span class="copy-cmd" data-cmd="git worktree remove ${esc(
@@ -332,6 +344,7 @@ function renderStackCard(stack, isMerged, idx) {
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
             ${pillCategory}
+            ${pillConflicts}
             ${pillRestack}
           </div>
         </div>
