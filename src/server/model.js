@@ -59,12 +59,20 @@ function parseTitle(title) {
   return { jira_tag: jiraTag, part_tag: partTag, title: body.trim() };
 }
 
+// Compact single-unit relative time: "12s ago", "5m ago", "4h ago", "3d ago".
+// "today" / "yesterday" used to obscure whether a PR was touched 20 minutes
+// or 23 hours ago — the granular version surfaces that at a glance.
 function relTime(iso) {
   if (!iso) return "";
-  const then = new Date(iso).getTime();
-  const ageDays = (Date.now() - then) / 86_400_000;
-  if (ageDays < 1) return "today";
-  return `${Math.floor(ageDays)}d ago`;
+  const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
 }
 
 function deriveStatus(decision, isBottom, isUserPR) {
