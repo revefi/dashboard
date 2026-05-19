@@ -6,6 +6,13 @@
 // a single global toggle stored separately ("asc" or "desc", default
 // "desc"). Switching modes never auto-flips the arrow — the arrow only
 // changes when the user clicks the toggle button.
+//
+// The "custom" mode is special: it has no comparator. Instead sortStacks
+// looks up an explicit ordering from localStorage (drag-and-drop sets it)
+// and places stacks accordingly. Anything not in the saved order falls
+// to the end so newly-opened PRs still show up.
+
+import { getCustomStackOrder } from "./storage.js";
 
 function maxUpdated(s) {
   let m = 0;
@@ -56,10 +63,33 @@ export const SORT_MODES = {
     label: "Name",
     cmp: (a, b) => (b.name || "").localeCompare(a.name || ""),
   },
+  custom: {
+    label: "Custom",
+    // No cmp — sortStacks handles this mode by reading the explicit
+    // ordering stored by drag-and-drop in localStorage.
+    custom: true,
+  },
 };
+
+function sortByCustomOrder(stacks) {
+  const order = getCustomStackOrder();
+  if (order.length === 0) return [...stacks];
+  const rank = new Map();
+  order.forEach((key, i) => rank.set(key, i));
+  // Bucket: ranked stacks (in stored order) then the rest (server order).
+  const ranked = [];
+  const unranked = [];
+  for (const s of stacks) {
+    if (rank.has(s.stack_key)) ranked.push(s);
+    else unranked.push(s);
+  }
+  ranked.sort((a, b) => rank.get(a.stack_key) - rank.get(b.stack_key));
+  return [...ranked, ...unranked];
+}
 
 export function sortStacks(stacks, mode, dir) {
   const entry = SORT_MODES[mode] || SORT_MODES.updated;
+  if (entry.custom) return sortByCustomOrder(stacks);
   // Stable: spread first so we don't mutate the caller's array; Array.sort
   // is stable on V8 ≥7 so equal-key stacks keep their server-natural order.
   const sorted = [...stacks].sort(entry.cmp);

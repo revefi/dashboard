@@ -17,6 +17,8 @@ import {
   setActiveStackSort,
   getActiveStackSortDir,
   setActiveStackSortDir,
+  getCustomStackOrder,
+  setCustomStackOrder,
 } from "./storage.js";
 import { SORT_MODES, sortStacks, arrowFor } from "./sort.js";
 import { wireDelegates } from "./delegates.js";
@@ -310,10 +312,17 @@ function renderStackCard(stack, isMerged, idx) {
   const anchorId = `stack-${completed ? "merged" : "active"}-${esc(
     stack.stack_key
   )}`;
+  // Drag handle is always rendered but CSS hides it unless the body has
+  // `.custom-sort`. Only active (non-merged) cards are draggable — there's
+  // no point reordering completed work.
+  const dragHandle = completed
+    ? ""
+    : `<span class="card-drag-handle" draggable="true" data-stop-toggle title="Drag to reorder">⋮⋮</span>`;
   return `
     <div id="${anchorId}" class="card stack-card ${
     completed ? "merged-card" : ""
   }" data-stack-key="${esc(stack.stack_key)}">
+      ${dragHandle}
       <div class="stack-summary" data-toggle-card>
         <div class="stack-head">
           <div>
@@ -770,21 +779,46 @@ function renderActiveSortDropdown() {
     )
     .join("");
   const arrow = arrowFor(curDir);
-  // Re-render the wrap from scratch every time; cheap and means we don't
-  // have to track which controls already exist.
+  // The direction toggle is meaningless under Custom — the user picked
+  // the order themselves. Drop it from the markup when custom is active.
+  const dirBtn =
+    curMode === "custom"
+      ? ""
+      : `<button class="sort-dir-btn" id="active-sort-dir-btn" type="button" title="Reverse sort direction">${arrow}</button>`;
   wrap.innerHTML =
     `<select class="sprint-select" id="active-sort-select" title="Sort active stacks">${opts}</select>` +
-    `<button class="sort-dir-btn" id="active-sort-dir-btn" type="button" title="Reverse sort direction">${arrow}</button>`;
+    dirBtn;
   const sel = $("#active-sort-select");
   sel.value = curMode;
   sel.addEventListener("change", () => {
-    setActiveStackSort(sel.value);
+    const nextMode = sel.value;
+    // First-time switch into Custom: snapshot the currently-displayed
+    // order so the user's drag-arena starts as the layout they were
+    // just looking at, not a random shuffle.
+    if (
+      nextMode === "custom" &&
+      curMode !== "custom" &&
+      getCustomStackOrder().length === 0 &&
+      store.currentData
+    ) {
+      const completed = getCompletedSet();
+      const activeNow = sortStacks(
+        store.currentData.stacks.filter((s) => !completed.has(s.stack_key)),
+        curMode,
+        curDir
+      );
+      setCustomStackOrder(activeNow.map((s) => s.stack_key));
+    }
+    setActiveStackSort(nextMode);
     render(store.currentData);
   });
-  $("#active-sort-dir-btn").addEventListener("click", () => {
-    setActiveStackSortDir(curDir === "asc" ? "desc" : "asc");
-    render(store.currentData);
-  });
+  const dirBtnEl = $("#active-sort-dir-btn");
+  if (dirBtnEl) {
+    dirBtnEl.addEventListener("click", () => {
+      setActiveStackSortDir(curDir === "asc" ? "desc" : "asc");
+      render(store.currentData);
+    });
+  }
 }
 
 export function render(data) {
@@ -797,6 +831,9 @@ export function render(data) {
   const merged = data.stacks.filter((s) => completed.has(s.stack_key));
 
   renderActiveSortDropdown();
+  // Drives CSS for drag-handle visibility + disables data-toggle-card
+  // while the user is dragging via JS handlers in delegates.js.
+  document.body.classList.toggle("custom-sort", getActiveStackSort() === "custom");
 
   $("#active-stacks").innerHTML =
     active.length === 0

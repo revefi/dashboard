@@ -16,6 +16,10 @@ export const ACTIVE_STACK_SORT_KEY = "dashboard.active_stack_sort";
 // default) or "asc" (smallest at top). Mode-independent — flipping the
 // toggle in one mode keeps the same direction when you switch modes.
 export const ACTIVE_STACK_SORT_DIR_KEY = "dashboard.active_stack_sort_dir";
+// User-chosen order for the "Custom" sort mode. Array of stack_keys in
+// the desired top-to-bottom order. Stacks not present in the array
+// (newly opened PRs) sort to the end.
+export const CUSTOM_STACK_ORDER_KEY = "dashboard.custom_stack_order";
 export const NOTEPAD_HIDDEN_KEY = "dashboard.notepad_hidden";
 export const LAST_INTEL_KEY = "dashboard.lastIntelligentTs";
 // Theme override: "light" or "dark" forces, absence means follow OS.
@@ -143,4 +147,17 @@ export function getActiveStackSortDir() {
 
 export function setActiveStackSortDir(v) {
   localStorage.setItem(ACTIVE_STACK_SORT_DIR_KEY, v);
+}
+
+export function getCustomStackOrder() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUSTOM_STACK_ORDER_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((k) => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setCustomStackOrder(arr) {
+  localStorage.setItem(CUSTOM_STACK_ORDER_KEY, JSON.stringify(arr));
 }
