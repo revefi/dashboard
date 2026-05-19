@@ -101,8 +101,22 @@ After a `node` upgrade (`asdf install nodejs <new>`), update one line in
 
 ### Stack cards
 
-Each open stack you own shows as one card, ordered by status priority (review
-comments → ready to merge → blocked → awaiting review).
+Each open stack you own shows as one card. Order is controlled by the **sort
+dropdown** next to the "Active stacks" heading:
+
+- **Updated** (default) — by most-recent PR activity
+- **Behind** — most commits behind origin/main at the top
+- **Comments** — most open human review comments first
+- **PRs** — biggest stacks at the top
+- **Created** — by stack age
+- **Name** — alphabetical
+- **Custom** — drag cards by their `⋮⋮` handle to set your own order;
+  persists in localStorage. The viewport auto-scrolls when you drag near
+  the top or bottom edge so you can drop into off-screen positions.
+
+A `↓` / `↑` arrow next to the dropdown flips the sort direction; the arrow
+is global (doesn't reset when you switch modes) and is hidden under Custom
+since the user-picked order already encodes direction.
 
 - **Default collapsed** — click the summary to expand. **Collapse all / Expand
   all** toggle in the header.
@@ -127,7 +141,9 @@ comments → ready to merge → blocked → awaiting review).
 - **Pre-flight conflict prediction** — `✓ mergeable` (green) or
   `✗ conflicts: <files>` (red, full list in tooltip). Computed via a read-only
   `git merge-tree --write-tree`. The Restack button is disabled when conflicts
-  are predicted, so you find out before you click.
+  are predicted, so you find out before you click. The same status surfaces
+  as a red **⚠ Conflicts** pill on the collapsed card too, so you don't have
+  to expand it to see auto-restack won't work.
 - **✎ Rename a stack** — pencil icon on hover. Persists in localStorage, takes
   priority over Claude-generated names, reflected in the sidebar nav.
 - **Mark complete** moves the card to "Merged stacks" with a `git worktree
@@ -189,6 +205,14 @@ stale each side is.
   selection.
 - **`📓 Hide notepad` toggle** in the header reclaims the third column for the
   main content when you need more horizontal space. Persists across reloads.
+
+### Sidebar tinting
+
+Each stack's entry in the left sidebar gets a soft background tint that
+matches the card's status pill — green for "ready to merge", yellow for
+"awaiting review", red for "address review comments" or merge conflicts,
+blue for "blocked upstream". A glance at the nav tells you which stacks
+need attention without scrolling.
 
 ### Other niceties
 

@@ -39,6 +39,7 @@ except via configured absolute paths in `src/server/config.js` (`REPO`,
 │   │   ├── notepad.js       markdown editor + notepad init
 │   │   ├── theme.js         Auto/Light/Dark cycle button
 │   │   ├── progress.js      median-driven progress fill on refresh buttons
+│   │   ├── sort.js          active-stacks sort comparators + custom DnD mode
 │   │   ├── jira-state.js    state-pill popover + transitions
 │   │   ├── restack-action.js  restack click handler
 │   │   ├── refresh.js       auto-refresh, freshness, collapse-all
@@ -279,7 +280,8 @@ placeholders by `innerHTML = ...` after fetching `/api/data`.
 | `render.js` | every `render*()` function + `render(data)` + `rebuildSidebar(data)` |
 | `notepad.js` | `wireMarkdownRemarks`, `renderMarkdown`, `initNotepad`, `applyNotepadVisibility`, `toggleNotepad` |
 | `theme.js` | `initTheme()` — wires the header's Auto/Light/Dark cycle button. "Auto" leaves `data-theme` unset so the OS @media query drives styling; Light/Dark sets `data-theme="..."` on `<html>` and persists under `dashboard.theme`. First-paint application is done by an inline `<script>` in `index.html`'s `<head>` to avoid FOUC. |
-| `progress.js` | `startRefreshProgress(btn, mode)` / `stopRefreshProgress(btn)` — `rAF` ticker that writes `--refresh-progress` (0..1) onto a button based on `elapsed / median(stored timings)`. `api.js` calls these around each refresh; `topbar.css` turns the variable into a left-to-right background tint fill. Pulses opacity once the elapsed time exceeds the median. Stays a no-op until we have ≥5 recorded samples — first 4 refreshes just show the label change. |
+| `progress.js` | `startRefreshProgress(btn, mode)` / `stopRefreshProgress(btn)` — `rAF` ticker that writes `--refresh-progress` (0..1) onto a button based on `elapsed / median(stored timings)`. `api.js` calls these around each refresh; `topbar.css` turns the variable into a left-to-right background tint fill. Pulses opacity once the elapsed time exceeds the median, then plays a success-tint fade-out on completion. Stays a no-op until we have ≥5 recorded samples. |
+| `sort.js` | `SORT_MODES` + `sortStacks(stacks, mode, dir)` + `arrowFor(dir)`. Six dimension modes (Updated / Behind / Comments / PRs / Created / Name) all written desc-style; `dir === "asc"` reverses. Plus a `custom` mode that pulls an explicit user-picked order from localStorage — `delegates.js` mutates that order via HTML5 drag-and-drop on each card. The whole `.stack-card` is the drag source in custom mode (`render.js` toggles `card.draggable`); a ⋮⋮ glyph in the top-left is just the visual hint. Auto-scrolls the viewport when the cursor reaches the top/bottom 90px during a drag (native DnD doesn't do this). |
 | `jira-state.js` | `openStateMenu`, popover positioning, `handleStateTransition` (optimistic, with revert on failure) |
 | `restack-action.js` | `handleRestackClick` — confirm dialog + POST + spinner |
 | `refresh.js` | `setupAutoRefresh` (self-rescheduling setTimeout + visibilitychange catch-up), `updateFreshness`, `toggleAllStacks`, `syncStickyTop` |
@@ -404,6 +406,9 @@ All under the `dashboard.*` namespace:
 | `dashboard.theme` | `"light"` or `"dark"` if the user picked one. Absent = follow OS via `prefers-color-scheme`. |
 | `dashboard.refresh_timings_ms` | JSON array of recent `/api/data` durations in ms (rolling window of 50). Drives the progress fill on the ↻ Refresh button after ≥5 samples accumulate. |
 | `dashboard.recs_timings_ms` | Same shape, for `/api/recommendations` (force=true only — cached reads aren't measured). Drives progress on the ⟳ Generate / ✨ Intelligent buttons. |
+| `dashboard.active_stack_sort` | Active-stacks sort mode: `"updated"` (default), `"behind"`, `"comments"`, `"prs"`, `"created"`, `"name"`, or `"custom"`. |
+| `dashboard.active_stack_sort_dir` | Direction for the sort: `"desc"` (default) or `"asc"`. Mode-independent — switching modes doesn't auto-flip the arrow. Ignored in `"custom"` mode. |
+| `dashboard.custom_stack_order` | JSON array of stack_keys in user-picked order, written by drag-and-drop. Unranked stacks (new PRs) fall to the bottom on display. |
 
 ## Adding features
 
@@ -470,27 +475,37 @@ a `.md-editor` and toggles between them.
 
 ## Performance notes
 
-Plain refresh ≈ 8s. The sequence (after parallelization):
+Plain refresh ≈ 7s. Pipeline shape: kick off everything we can in
+parallel after `initial_fetch`, then have a single `Promise.all` barrier
+before the render loop. Per-stage timings get appended to
+`cache/refresh-timings.jsonl` (rolling 1000 entries — `tail -n 5
+cache/refresh-timings.jsonl | jq` to inspect).
 
-| Stage | Cost |
-| --- | --- |
-| `gt log` + `gh pr list` + recent merged + worktrees | ~1.5s parallel |
-| Upstream `fetchAnyPR` × N + `fetchPRMeta` × N | ~1s parallel (often N=0) |
-| `fetchPrSignalsBulk` for all open user PRs | ~2-3s — single aliased GraphQL query returning review threads + CI rollup, **not** one-call-per-PR |
-| Session scoring (~60 JSONL files × N stacks) | ~1s — files parallel within scoring, all stacks scored concurrently |
-| Stack-name generation | 0s (cached) or ~5s (cold) |
-| Jira REST × N + Jira search | <1s parallel |
-| Stale-worktree detection | <1s parallel |
+| Stage | Cost (current) | Notes |
+| --- | --- | --- |
+| `initial_fetch` (gt log + open PRs + merged + worktrees) | ~1.5s parallel | `gh pr list --search "is:open author:<login>"` for the open-PRs leg — was 10s with `--limit 500`, now ~1s |
+| `pr_signals` | ~2-3s | Single aliased GraphQL returning review threads + CI rollup for every open user PR. Kicked off right after openPRs resolves. |
+| `resumes` (session scoring across ~60 JSONLs per stack) | ~5s | Long pole. Files greppped in parallel per stack, all stacks concurrent. |
+| `behinds` + `conflicts` | <0.5s each | `git merge-base` + `git rev-list --count` per stack; in-memory 3-way merge probe. |
+| `stale_worktrees` + `jira_chips` + `open_jira` | 1-3s each | All run concurrently with `resumes`, so the slowest of the trio (not the sum) shows up on the wall clock. |
+| `enhance_names` | 0s (cached) or ~5s (cold) | Skipped entirely when the cache key (PR-set hash) matches. |
 
-Earlier versions did 27 parallel `gh api graphql` subprocess spawns for review
-threads, sequential `grep` per session file, and sequential stale-worktree
-checks — ~28s baseline.
+`git fetch origin main` does NOT run on the refresh critical path — it
+runs once at boot and every 5 minutes from a background timer in
+`index.js`. `behind_origin` reads whatever ref the most recent tick
+pulled.
+
+Earlier versions ran around 20s — `gh pr list --limit 500` paged 5
+times (10s), `pr_signals` and `resumes` ran sequentially, and the
+post-render stale/chips/jira work was after the render loop instead of
+concurrent with it.
 
 ## Gotchas (things that bit us)
 
 1. **gh's `--author "@me"` returns `[]` under Node child_process.** No clue
-   why — works fine from interactive shell. Workaround in `fetchOpenPRs`:
-   fetch all open PRs and filter by `author.login` in JS. Always pass
+   why — works fine from interactive shell. `--search "is:open
+   author:<login>"` is a different code path (search backend, not list)
+   and works fine, which is what `fetchOpenPRs` uses. Always pass
    `--repo revefi/rcode` explicitly because gh's auto-detect from cwd is
    also flaky in the same context.
 
