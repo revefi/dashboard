@@ -54,24 +54,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Category tint — matches the .pill palette in stacks.css so the
-   sidebar entry reads at a glance as the same status as the card. The
-   conflict rule is listed AFTER the category rules so it wins (same
-   selector specificity → source order decides). */
+/* Category tint — `color-mix` lets us pull a low-opacity wash of the
+   semantic color in both light + dark mode (the prebaked --*-bg vars
+   come out way too saturated in dark mode). The conflict rule is listed
+   AFTER the category rules so it wins on same selector specificity. */
 .jump-nav .nav-stack-item[data-category="ready"] {
-  background: var(--success-bg);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 .jump-nav .nav-stack-item[data-category="awaiting_review"] {
-  background: var(--warn-bg);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
 }
 .jump-nav .nav-stack-item[data-category="human_review"] {
-  background: var(--danger-bg);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 .jump-nav .nav-stack-item[data-category="blocked_upstream"] {
-  background: var(--primary-bg);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
 }
 .jump-nav .nav-stack-item[data-conflicts="1"] {
-  background: var(--danger-bg);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
 }
 .jump-nav .nav-stack-item:hover {
   /* Slight darken on hover so the category tint reads through but the
@@ -81,6 +81,17 @@
 }
 .jump-nav .nav-stack-item.merged {
   opacity: 0.65;
+}
+/* Inside a flex item, text-overflow: ellipsis on the button alone won't
+   work for the title <span> — flex children default to min-width: auto,
+   which lets them refuse to shrink. min-width: 0 + the usual overflow
+   trio on the label span gets us a clean trailing ellipsis. */
+.jump-nav .nav-stack-item > span:last-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .jump-nav .nav-stack-num {
   color: var(--muted);
