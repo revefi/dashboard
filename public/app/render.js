@@ -15,8 +15,10 @@ import {
   setStackFilter,
   getActiveStackSort,
   setActiveStackSort,
+  getActiveStackSortDir,
+  setActiveStackSortDir,
 } from "./storage.js";
-import { SORT_MODES, sortStacks } from "./sort.js";
+import { SORT_MODES, sortStacks, arrowFor } from "./sort.js";
 import { wireDelegates } from "./delegates.js";
 
 export function renderSummary(meta) {
@@ -652,7 +654,8 @@ export function rebuildSidebar(data) {
   // numbering matches what the user sees on the right.
   const active = sortStacks(
     data.stacks.filter((s) => !completed.has(s.stack_key)),
-    getActiveStackSort()
+    getActiveStackSort(),
+    getActiveStackSortDir()
   );
   const merged = data.stacks.filter((s) => completed.has(s.stack_key));
 
@@ -739,19 +742,28 @@ export function rebuildSidebar(data) {
 function renderActiveSortDropdown() {
   const wrap = $("#active-sort-wrap");
   if (!wrap) return;
-  const cur = getActiveStackSort();
+  const curMode = getActiveStackSort();
+  const curDir = getActiveStackSortDir();
   const opts = Object.entries(SORT_MODES)
     .map(
       ([key, mode]) =>
         `<option value="${esc(key)}">${esc(mode.label)}</option>`
     )
     .join("");
-  wrap.innerHTML = `<select class="sprint-select" id="active-sort-select" title="Sort active stacks">${opts}</select>`;
+  const arrow = arrowFor(curMode, curDir);
+  // Re-render the wrap from scratch every time; cheap and means we don't
+  // have to track which controls already exist.
+  wrap.innerHTML =
+    `<select class="sprint-select" id="active-sort-select" title="Sort active stacks">${opts}</select>` +
+    `<button class="sort-dir-btn" id="active-sort-dir-btn" type="button" title="Reverse sort direction">${arrow}</button>`;
   const sel = $("#active-sort-select");
-  sel.value = cur;
+  sel.value = curMode;
   sel.addEventListener("change", () => {
     setActiveStackSort(sel.value);
-    // Re-render with the new sort. Cheap: same data, just resorted.
+    render(store.currentData);
+  });
+  $("#active-sort-dir-btn").addEventListener("click", () => {
+    setActiveStackSortDir(curDir === "reversed" ? "natural" : "reversed");
     render(store.currentData);
   });
 }
@@ -762,7 +774,7 @@ export function render(data) {
   const completed = getCompletedSet();
 
   const activeUnsorted = data.stacks.filter((s) => !completed.has(s.stack_key));
-  const active = sortStacks(activeUnsorted, getActiveStackSort());
+  const active = sortStacks(activeUnsorted, getActiveStackSort(), getActiveStackSortDir());
   const merged = data.stacks.filter((s) => completed.has(s.stack_key));
 
   renderActiveSortDropdown();

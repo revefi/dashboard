@@ -31,36 +31,59 @@ function totalHumanComments(s) {
   return n;
 }
 
+// Each mode's `cmp` is written for its natural direction ("most
+// interesting first"). `naturalDir` records whether that natural order
+// puts the largest value at the top (desc, ↓) or the smallest (asc, ↑).
+// The direction toggle reverses the sorted result; the arrow shown in the
+// UI is derived from naturalDir XOR (dir === "reversed").
 export const SORT_MODES = {
   updated: {
     label: "Recently updated",
+    naturalDir: "desc",
     cmp: (a, b) => maxUpdated(b) - maxUpdated(a),
   },
   behind: {
     label: "Most behind origin",
+    naturalDir: "desc",
     cmp: (a, b) => (b.behind_origin || 0) - (a.behind_origin || 0),
   },
   comments: {
     label: "Most review comments",
+    naturalDir: "desc",
     cmp: (a, b) => totalHumanComments(b) - totalHumanComments(a),
   },
   prs: {
     label: "Most PRs",
+    naturalDir: "desc",
     cmp: (a, b) => (b.counts?.created || 0) - (a.counts?.created || 0),
   },
   oldest: {
     label: "Oldest first",
+    naturalDir: "asc",
     cmp: (a, b) => minCreated(a) - minCreated(b),
   },
   name: {
     label: "Alphabetical",
+    naturalDir: "asc",
     cmp: (a, b) => (a.name || "").localeCompare(b.name || ""),
   },
 };
 
-export function sortStacks(stacks, mode) {
+export function sortStacks(stacks, mode, dir) {
   const entry = SORT_MODES[mode] || SORT_MODES.updated;
   // Stable: spread first so we don't mutate the caller's array; Array.sort
   // is stable on V8 ≥7 so equal-key stacks keep their server-natural order.
-  return [...stacks].sort(entry.cmp);
+  const sorted = [...stacks].sort(entry.cmp);
+  return dir === "reversed" ? sorted.reverse() : sorted;
+}
+
+// Returns "↓" if the current effective order puts larger values at the
+// top, "↑" if smaller. Used by the direction toggle button so the arrow
+// matches what the user actually sees.
+export function arrowFor(mode, dir) {
+  const entry = SORT_MODES[mode] || SORT_MODES.updated;
+  const naturalDesc = entry.naturalDir === "desc";
+  const isReversed = dir === "reversed";
+  const effectiveDesc = naturalDesc !== isReversed; // XOR
+  return effectiveDesc ? "↓" : "↑";
 }

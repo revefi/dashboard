@@ -21,6 +21,25 @@ h2 .section-controls {
 .sprint-select:hover {
   border-color: var(--primary);
 }
+/* Direction-arrow toggle that sits next to the active-stacks sort
+   <select>. Matches the .sprint-select rhythm so the two controls read
+   as one compact widget; the arrow updates on click via render.js. */
+.sort-dir-btn {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-left: 4px;
+  line-height: 1;
+}
+.sort-dir-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
 table.jira td.sprint-cell {
   font-size: 12px;
   color: var(--muted);

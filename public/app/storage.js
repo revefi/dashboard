@@ -12,6 +12,9 @@ export const STACK_FILTER_KEY = "dashboard.stack_filter";
 // Active-stacks sort order — one of: "updated", "behind", "comments",
 // "prs", "oldest", "name". Absent → defaults to "updated".
 export const ACTIVE_STACK_SORT_KEY = "dashboard.active_stack_sort";
+// Direction toggle for the active-stacks sort: "natural" follows each
+// mode's preferred direction (most-interesting-first), "reversed" flips it.
+export const ACTIVE_STACK_SORT_DIR_KEY = "dashboard.active_stack_sort_dir";
 export const NOTEPAD_HIDDEN_KEY = "dashboard.notepad_hidden";
 export const LAST_INTEL_KEY = "dashboard.lastIntelligentTs";
 // Theme override: "light" or "dark" forces, absence means follow OS.
@@ -129,4 +132,14 @@ export function getActiveStackSort() {
 
 export function setActiveStackSort(v) {
   localStorage.setItem(ACTIVE_STACK_SORT_KEY, v);
+}
+
+export function getActiveStackSortDir() {
+  return localStorage.getItem(ACTIVE_STACK_SORT_DIR_KEY) === "reversed"
+    ? "reversed"
+    : "natural";
+}
+
+export function setActiveStackSortDir(v) {
+  localStorage.setItem(ACTIVE_STACK_SORT_DIR_KEY, v);
 }
