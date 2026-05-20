@@ -9,6 +9,7 @@ const {
   parseGtLog,
   buildStacksFromGtLog,
   fetchWorktrees,
+  fetchOriginMain,
   fetchStackBehind,
   checkRestackConflicts,
   fetchLocalBranchMeta,
@@ -117,14 +118,49 @@ async function buildModel() {
     fetchPrSignalsBulk(openPRs.map((p) => p.number))
   );
 
+  // Parse the stack tree NOW (cheap, synchronous) so we can use it to
+  // figure out which worktrees host an open user PR somewhere in their
+  // chain. Without this, a worktree currently checked out on a merged
+  // branch is misclassified as stale even though its stack has more PRs
+  // ahead of it.
+  const parsedLines = parseGtLog(gtLogText);
+  const rawStacks = buildStacksFromGtLog(parsedLines);
+
+  const branchToOpenPR = new Map(openPRs.map((p) => [p.headRefName, p]));
+  const branchToMergedPR = new Map(mergedPRs.map((p) => [p.h, p]));
+  const worktreeBranchToWT = new Map(worktrees.map((w) => [w.branch, w]));
+
+  // For each worktree, find its chain in gt log (via the currently
+  // checked-out branch) and mark the worktree as "in use" if any branch
+  // in that chain has an open user PR.
+  const activeBranchesEarly = new Set(openPRs.map((p) => p.headRefName));
+  const branchToChain = new Map();
+  for (const chain of rawStacks) {
+    for (const b of chain) branchToChain.set(b.branch, chain);
+  }
+  const inUseWorktreePaths = new Set();
+  for (const w of worktrees) {
+    const chain = branchToChain.get(w.branch);
+    if (!chain) continue;
+    for (const b of chain) {
+      if (activeBranchesEarly.has(b.branch)) {
+        inUseWorktreePaths.add(w.path);
+        break;
+      }
+    }
+  }
+
   // Stale worktrees + open Jira are independent of anything stack-shaped.
   // Pulling them out of the post-render block lets them overlap with the
   // expensive `resumes` work below.
-  const activeBranchesEarly = new Set(openPRs.map((p) => p.headRefName));
   const stalePromise = t.time("stale_worktrees", () =>
     Promise.all(
       worktrees.map(async (w) => {
         if (activeBranchesEarly.has(w.branch)) return null;
+        // Skip worktrees whose stack chain still hosts an open user PR —
+        // the user is sitting on a merged branch in a not-yet-finished
+        // stack. Not stale.
+        if (inUseWorktreePaths.has(w.path)) return null;
         const anyPR = await fetchAnyPR(w.branch);
         if (anyPR) {
           if (anyPR.state === "MERGED") {
@@ -151,18 +187,15 @@ async function buildModel() {
   );
   const openJiraPromise = t.time("open_jira", () => fetchOpenJiraTickets());
 
-  const parsedLines = parseGtLog(gtLogText);
-  const rawStacks = buildStacksFromGtLog(parsedLines);
-
-  const branchToOpenPR = new Map(openPRs.map((p) => [p.headRefName, p]));
-  const branchToMergedPR = new Map(mergedPRs.map((p) => [p.h, p]));
-  const worktreeBranchToWT = new Map(worktrees.map((w) => [w.branch, w]));
-
   // Pre-detect branches that are FULLY merged into origin/main even though
   // they don't show up in fetchRecentMergedPRs. Graphite squashes leave the
   // GitHub PR CLOSED with mergedAt=null, so our recent-merged scan misses
   // them. Without this check, a freshly-merged branch whose worktree still
   // exists would be classified as "local only" and shown as an active stack.
+  // The check relies on origin/main being up to date — the background
+  // tick runs every 5 minutes, but a PR merged less than a tick ago would
+  // still appear as local-only without a synchronous fetch. We pay the
+  // ~0.5s only when there's actually a local-only candidate to inspect.
   const localCandidateBranches = [
     ...new Set(
       rawStacks.flatMap((c) =>
@@ -178,6 +211,13 @@ async function buildModel() {
     ),
   ];
   const fullyMergedBranches = new Set();
+  if (localCandidateBranches.length > 0) {
+    // Refresh origin/main right now — the background fetch ticks every
+    // 5 minutes, and a branch merged inside that window would otherwise
+    // get misclassified as local-only because local origin/main doesn't
+    // have the merge yet.
+    await t.time("origin_fetch", () => fetchOriginMain());
+  }
   await t.time("fully_merged_detect", () =>
     Promise.all(
       localCandidateBranches.map(async (branch) => {
