@@ -778,10 +778,10 @@ export function rebuildSidebar(data) {
       e.preventDefault();
       const target = document.getElementById(el.dataset.jump);
       if (!target) return;
-      // If targeting a collapsed stack-card, expand it before scrolling.
-      if (target.classList.contains("stack-card")) {
-        target.classList.add("expanded");
-      }
+      // Just scroll — never auto-expand. Earlier behavior expanded the
+      // target card so its body was visible, but that fights with the
+      // user's explicit collapse state. They can click the card itself
+      // to expand it after navigating.
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
