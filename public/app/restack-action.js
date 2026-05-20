@@ -4,7 +4,24 @@
 import { store } from "./store.js";
 import { fetchData } from "./api.js";
 
+// On failure we leave the button in a sticky "✗ Failed — retry" state
+// with the full error in its tooltip, so the user can still see what
+// went wrong after the alert is dismissed. The state clears the next
+// time they click the button (retry) or when /api/data re-renders the
+// card on a refresh.
+function markRestackFailed(btn, msg) {
+  btn.disabled = false;
+  btn.innerHTML = "✗ Failed — retry";
+  btn.classList.add("trunk-restack-btn-failed");
+  btn.title = `Last attempt failed:\n\n${msg.slice(0, 1000)}`;
+}
+
 export async function handleRestackClick(btn) {
+  // Clear any leftover failure state from a previous attempt before we
+  // re-enter the confirm dialog.
+  btn.classList.remove("trunk-restack-btn-failed");
+  btn.title = "";
+
   const stackKey = btn.dataset.restackStack;
   const stack = store.currentData?.stacks?.find((s) => s.stack_key === stackKey);
   if (!stack) return;
@@ -22,7 +39,6 @@ export async function handleRestackClick(btn) {
   );
   if (!ok) return;
 
-  const origHTML = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span> Restacking + pushing…`;
   try {
@@ -35,15 +51,13 @@ export async function handleRestackClick(btn) {
     if (!res.ok || body.ok === false) {
       const msg = body.error || res.statusText || "Restack failed";
       window.alert(`Restack failed:\n\n${msg}`);
-      btn.disabled = false;
-      btn.innerHTML = origHTML;
+      markRestackFailed(btn, msg);
       return;
     }
     // Success — pull fresh data so the badge clears (or shows the new count).
     await fetchData(true, false);
   } catch (err) {
     window.alert(`Restack failed:\n\n${err.message}`);
-    btn.disabled = false;
-    btn.innerHTML = origHTML;
+    markRestackFailed(btn, err.message);
   }
 }

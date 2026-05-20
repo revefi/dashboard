@@ -445,6 +445,20 @@ body.custom-sort #active-stacks .stack-card.dragging {
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* Sticky failure state. Stays on the button until the user clicks it
+   to retry (cleared at the top of handleRestackClick) or the next data
+   refresh re-renders the card. Hover the button to read the full error
+   from the title attribute. */
+.trunk-restack-btn.trunk-restack-btn-failed {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.trunk-restack-btn.trunk-restack-btn-failed:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  color: var(--danger);
+  border-color: var(--danger);
+}
 .trunk-mergeable {
   font-style: normal;
   flex-shrink: 0;
