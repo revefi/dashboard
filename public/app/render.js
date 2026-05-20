@@ -403,27 +403,47 @@ function renderStaleWorktrees(list) {
   }
   sec.style.display = "";
   $("#stale-list").innerHTML = list
-    .map(
-      (wt) => `
+    .map((wt) => {
+      const jiraKeys = wt.jira_keys || [];
+      const jiraChips = jiraKeys
+        .map(
+          (k) =>
+            `<a class="chip" href="https://revefi.atlassian.net/browse/${esc(
+              k
+            )}" target="_blank" rel="noopener">${esc(k)}</a>`
+        )
+        .join("");
+      const closeBtn = jiraKeys.length
+        ? `<button class="btn close-jira-btn" data-close-jira="${esc(
+            jiraKeys.join(",")
+          )}" title="Transition ${esc(
+            jiraKeys.join(", ")
+          )} to Done">✓ Close ${
+            jiraKeys.length === 1 ? "Jira" : `${jiraKeys.length} Jiras`
+          }</button>`
+        : "";
+      return `
     <div class="stale-worktree-row">
       <span class="stale-worktree-name">${esc(wt.name)}</span>
       <span class="stale-worktree-reason">
         ${esc(wt.reason)}${
-        wt.pr_url
-          ? ` (<a href="${esc(wt.pr_url)}" target="_blank" rel="noopener">PR #${
-              wt.pr_num
-            }</a>)`
-          : ""
-      }
+          wt.pr_url
+            ? ` (<a href="${esc(wt.pr_url)}" target="_blank" rel="noopener">PR #${
+                wt.pr_num
+              }</a>)`
+            : ""
+        }
       </span>
+      ${jiraChips ? `<span class="stale-worktree-jiras">${jiraChips}</span>` : ""}
+      ${closeBtn}
       <span class="copy-cmd" data-cmd="git worktree remove ${esc(
         wt.path
       )}" data-copy>git worktree remove ${esc(
         wt.path
       )} <span class="cp">copy</span></span>
     </div>
-  `
-    )
+  `;
+    })
     .join("");
 }
 

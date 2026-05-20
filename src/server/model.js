@@ -92,6 +92,51 @@ function deriveStatus(decision, isBottom, isUserPR) {
   return { label: "Needs review", cls: "primary" };
 }
 
+// Check whether a branch has any commits not yet in origin/main. Used to
+// detect Graphite squash-merges, which leave the GitHub PR in CLOSED
+// state with mergedAt=null — the only reliable "actually merged" signal
+// is that the branch's tip's contents are fully reachable from origin/
+// main. Caller is responsible for keeping origin/main reasonably fresh.
+async function branchFullyMergedIntoMain(branch) {
+  try {
+    const { stdout } = await execP(
+      `git rev-list --count ${branch} ^origin/main`,
+      { cwd: REPO, maxBuffer: 1e6 }
+    );
+    return (parseInt(stdout.trim(), 10) || 0) === 0;
+  } catch {
+    return false;
+  }
+}
+
+// Collect every Jira key tied to a stale worktree. Pull from anyPR's
+// title and from any siblings in the same chain we still have data for
+// (open PRs + recently-merged PRs). Useful for the frontend so it can
+// offer a "close these tickets" button next to the worktree row.
+function collectJiraKeysForWorktree(
+  w,
+  anyPR,
+  branchToChain,
+  branchToOpenPR,
+  branchToMergedPR
+) {
+  const keys = new Set();
+  const pushFromTitle = (title) => {
+    if (!title) return;
+    const t = parseTitle(title);
+    if (t.jira_tag && t.jira_tag !== "NO-JIRA") keys.add(t.jira_tag);
+  };
+  pushFromTitle(anyPR?.title);
+  const chain = branchToChain.get(w.branch);
+  if (chain) {
+    for (const b of chain) {
+      pushFromTitle(branchToOpenPR.get(b.branch)?.title);
+      pushFromTitle(branchToMergedPR.get(b.branch)?.t);
+    }
+  }
+  return [...keys].sort();
+}
+
 async function buildModel() {
   const t = new Timer();
 
@@ -162,12 +207,35 @@ async function buildModel() {
         // stack. Not stale.
         if (inUseWorktreePaths.has(w.path)) return null;
         const anyPR = await fetchAnyPR(w.branch);
+        const collectJiraKeys = () => collectJiraKeysForWorktree(
+          w, anyPR, branchToChain, branchToOpenPR, branchToMergedPR
+        );
         if (anyPR) {
-          if (anyPR.state === "MERGED") {
-            return { ...w, reason: `PR #${anyPR.number} merged`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
+          // Graphite squash-merges leave GitHub in CLOSED state with
+          // mergedAt=null — the dashboard would mislabel those as
+          // "closed without merge". Verify against origin/main: if the
+          // branch has no unique commits, the changes ARE in main.
+          let actuallyMerged = anyPR.state === "MERGED";
+          if (anyPR.state === "CLOSED") {
+            actuallyMerged = await branchFullyMergedIntoMain(w.branch);
+          }
+          if (actuallyMerged) {
+            return {
+              ...w,
+              reason: `PR #${anyPR.number} merged`,
+              pr_num: anyPR.number,
+              pr_url: graphiteUrl(anyPR.number),
+              jira_keys: collectJiraKeys(),
+            };
           }
           if (anyPR.state === "CLOSED") {
-            return { ...w, reason: `PR #${anyPR.number} closed without merge`, pr_num: anyPR.number, pr_url: graphiteUrl(anyPR.number) };
+            return {
+              ...w,
+              reason: `PR #${anyPR.number} closed without merge`,
+              pr_num: anyPR.number,
+              pr_url: graphiteUrl(anyPR.number),
+              jira_keys: collectJiraKeys(),
+            };
           }
           return null;
         }
@@ -176,7 +244,13 @@ async function buildModel() {
             `git -C '${w.path}' log main..HEAD --oneline | head -1`
           );
           if (!stdout.trim()) {
-            return { ...w, reason: "Branch fully merged into main (no unique commits)", pr_num: null, pr_url: null };
+            return {
+              ...w,
+              reason: "Branch fully merged into main (no unique commits)",
+              pr_num: null,
+              pr_url: null,
+              jira_keys: collectJiraKeys(),
+            };
           }
         } catch {
           // ignore — git error means we just don't classify this worktree as stale

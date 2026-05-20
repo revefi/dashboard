@@ -753,6 +753,28 @@ details.upstream-pr-list .stack-row {
   color: var(--muted);
   flex: 1;
 }
+.stale-worktree-jiras {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.close-jira-btn {
+  background: var(--card);
+  color: var(--info);
+  border: 1px solid var(--info);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.close-jira-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.close-jira-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
 .merged-card {
   opacity: 0.85;
 }

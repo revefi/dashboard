@@ -12,6 +12,7 @@ const {
   jiraConfigured,
   fetchJiraTransitions,
   performJiraTransition,
+  closeJiraTicket,
 } = require("./jira");
 
 const MIME = {
@@ -137,6 +138,33 @@ async function handle(req, res) {
       cache.ts = 0;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
+    return;
+  }
+
+  // Batch-close jira tickets — used by the stale-worktree row's "Close
+  // Jiras" button. Body: { keys: ["REV-1", "REV-2", ...] }. Returns
+  // per-key {key, to: <status>} on success or {key, error} on failure.
+  if (url.pathname === "/api/jira/close" && req.method === "POST") {
+    try {
+      const body = await readJson(req);
+      const keys = Array.isArray(body?.keys) ? body.keys : [];
+      const results = await Promise.all(
+        keys.map(async (key) => {
+          try {
+            const to = await closeJiraTicket(key);
+            return { key, to };
+          } catch (err) {
+            return { key, error: err.message };
+          }
+        })
+      );
+      cache.ts = 0;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, results }));
     } catch (err) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: err.message }));

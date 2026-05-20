@@ -145,6 +145,56 @@ export function wireDelegates() {
     });
   });
 
+  // "Close Jira" button on stale-worktree rows — batch-transitions every
+  // Jira ticket the worktree was tied to into the Done category.
+  $$("[data-close-jira]").forEach((btn) => {
+    if (btn._closeJiraWired) return;
+    btn._closeJiraWired = true;
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const keys = btn.dataset.closeJira.split(",").filter(Boolean);
+      if (keys.length === 0) return;
+      if (
+        !window.confirm(
+          `Transition ${keys.join(", ")} to Done?\n\nThis fires a Jira ` +
+            `state transition for each. No-op if a ticket is already in a ` +
+            `Done state with no transition out of it.`
+        )
+      ) {
+        return;
+      }
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Closing…";
+      try {
+        const res = await fetch("/api/jira/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keys }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || body.ok === false) {
+          throw new Error(body.error || res.statusText || "close failed");
+        }
+        const failed = (body.results || []).filter((r) => r.error);
+        if (failed.length > 0) {
+          window.alert(
+            "Some tickets did not close:\n\n" +
+              failed.map((f) => `${f.key}: ${f.error}`).join("\n")
+          );
+        }
+        // Pull fresh data so the worktree section reflects the new state.
+        const { fetchData } = await import("./api.js");
+        await fetchData(true, false);
+      } catch (err) {
+        window.alert(`Close failed:\n\n${err.message}`);
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
+    });
+  });
+
   // Anything tagged data-stop-toggle: swallow pointer + key events so
   // interacting with content inside <summary> doesn't bubble up and toggle
   // the card open/closed.

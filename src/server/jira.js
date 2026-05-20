@@ -171,6 +171,30 @@ function deriveJiraNote(t) {
   return "—";
 }
 
+// Pick the most "Done-like" transition available for a ticket and fire
+// it. We match on the `to.statusCategory.key === "done"` field (Jira's
+// canonical signal) and fall back to a name regex if that isn't set.
+// Throws when no such transition is reachable from the ticket's current
+// state — caller surfaces the error.
+async function closeJiraTicket(key) {
+  if (!jiraConfigured()) throw new Error("jira not configured");
+  const transitions = await fetchJiraTransitions(key);
+  if (transitions.length === 0) {
+    throw new Error(`no transitions available for ${key}`);
+  }
+  const done =
+    transitions.find((t) => t.to_category === "done") ||
+    transitions.find((t) => /^(done|closed|resolved)$/i.test(t.to_status));
+  if (!done) {
+    const available = transitions.map((t) => t.to_status).join(", ");
+    throw new Error(
+      `no "Done" transition reachable from current state; available: ${available}`
+    );
+  }
+  await performJiraTransition(key, done.id);
+  return done.to_status;
+}
+
 module.exports = {
   jiraConfigured,
   jiraGet,
@@ -181,5 +205,6 @@ module.exports = {
   fetchOpenJiraTickets,
   fetchJiraTransitions,
   performJiraTransition,
+  closeJiraTicket,
   deriveJiraNote,
 };
